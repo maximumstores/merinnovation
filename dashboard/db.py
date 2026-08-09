@@ -154,6 +154,11 @@ TRANSLATIONS = {
 
 Підсумок рахується **лише по дозрілих датах** — інакше нулі свіжих днів занижували б загальний відсоток.
 """,
+        "sev_critical": "Потребує дії сьогодні",
+        "sev_warning": "Варто подивитись",
+        "sev_ok": "Під контролем",
+        "ai_evidence": "На чому це ґрунтується",
+        "leaks_frozen_hint": "Розпродаж або зниження ціни повертає ці гроші в обіг. Поки лежить — не працює і накопичує плату за зберігання.",
         "ai_main_summary": "Головне за сьогодні",
         "ai_actions": "Що робити",
         "ai_supporting_data": "Опорні показники",
@@ -333,6 +338,11 @@ TRANSLATIONS = {
 
 Итог считается **только по дозревшим датам** — иначе нули свежих дней занижали бы общий процент.
 """,
+        "sev_critical": "Требует действия сегодня",
+        "sev_warning": "Стоит посмотреть",
+        "sev_ok": "Под контролем",
+        "ai_evidence": "На чём это основано",
+        "leaks_frozen_hint": "Распродажа или снижение цены возвращает эти деньги в оборот. Пока лежит — не работает и копит плату за хранение.",
         "ai_main_summary": "Главное за сегодня",
         "ai_actions": "Что делать",
         "ai_supporting_data": "Опорные показатели",
@@ -512,6 +522,11 @@ TRANSLATIONS = {
 
 The total counts **matured dates only** — otherwise zeros from recent days would drag the overall percentage down.
 """,
+        "sev_critical": "Needs action today",
+        "sev_warning": "Worth a look",
+        "sev_ok": "Under control",
+        "ai_evidence": "What this is based on",
+        "leaks_frozen_hint": "Selling through or discounting returns this money to circulation. While it sits, it earns nothing and accrues storage fees.",
         "ai_main_summary": "Today's headline",
         "ai_actions": "Actions",
         "ai_supporting_data": "Supporting metrics",
