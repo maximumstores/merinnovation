@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Merinnovation Dashboard — ІІ-аналітик у форматі консалтингового звіту."""
+"""Merinnovation Dashboard — ІІ-аналітик.
+
+Порядок читання: вердикт → гроші → що робити → докази → напрями.
+Спершу відповідь, потім обґрунтування — власник має зрозуміти за 30 секунд.
+"""
 
 import json
 import os
@@ -12,24 +16,35 @@ import streamlit as st
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db import (ACCENT, ACCENT2, cur_theme, get_conn, inject_css,
-                lang_selector, metric_card, plotly_layout, q, t, themed_axis)
+                lang_selector, plotly_layout, q, t, themed_axis)
 
 st.set_page_config(layout="wide", page_title="Merinnovation · AI", page_icon="🐑")
 lang_selector()
 inject_css()
 
 th = cur_theme()
+RED = "#ef4444"
+AMBER = "#f59e0b"
 
 SEV = {
-    "critical": ("#ef4444", "🔴"),
-    "warning": ("#f59e0b", "🟠"),
+    "critical": (RED, "🔴"),
+    "warning": (AMBER, "🟠"),
     "ok": (ACCENT, "🟢"),
 }
-AGENT_ICONS = {"main": "🧠", "sales": "📈", "stock": "📦",
+AGENT_ICONS = {"main": "🧠", "money": "💸", "sales": "📈", "stock": "📦",
                "forecast": "🔮", "finance": "💰", "traffic": "🔍"}
-AGENT_ORDER = ["main", "sales", "stock", "forecast", "finance", "traffic"]
+AGENT_ORDER = ["main", "money", "stock", "forecast", "sales", "finance", "traffic"]
 
-st.markdown(f"## {t('ai_title')}")
+# додаткові стилі сторінки: табличні цифри для сум, тонкі роздільники
+st.markdown(f"""
+<style>
+.rp-num {{ font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }}
+.rp-eyebrow {{ color:{th["muted"]}; font-size:11px; letter-spacing:.14em;
+  text-transform:uppercase; font-weight:700; }}
+.rp-rule {{ height:1px; background:{th["border"]}; margin:26px 0 20px 0; }}
+</style>
+""", unsafe_allow_html=True)
+
 
 # ------------------------------------------------- перевірка таблиці ----
 exists = q("""
@@ -50,7 +65,6 @@ if dates.empty:
 
 date_options = pd.to_datetime(dates["report_date"]).dt.date.tolist()
 
-# які мови є в базі за цю дату
 has_lang_col = q("""
     SELECT COUNT(*) AS n FROM information_schema.columns
     WHERE table_schema='merinnovation' AND table_name='ai_insights'
@@ -58,7 +72,8 @@ has_lang_col = q("""
 """)
 lang_supported = not has_lang_col.empty and int(has_lang_col["n"].iloc[0]) > 0
 
-fc1, fc2, fc3 = st.columns([2, 2, 4])
+# ------------------------------------------------------------ панель ----
+fc1, fc2, fc3, fc4 = st.columns([2, 2, 3, 2])
 with fc1:
     sel_date = st.selectbox(t("ai_report_date"), date_options,
                             format_func=lambda d: d.strftime("%d.%m.%Y"),
@@ -66,29 +81,25 @@ with fc1:
 
 ui_lang = st.session_state.get("lang", "uk")
 sel_lang = ui_lang
-
 if lang_supported:
-    langs_avail = q("""
-        SELECT DISTINCT COALESCE(lang, 'uk') AS lang
+    la = q("""
+        SELECT DISTINCT COALESCE(lang,'uk') AS lang
         FROM merinnovation.ai_insights WHERE report_date = %s
     """, (sel_date,))
-    available = langs_avail["lang"].tolist() if not langs_avail.empty else ["uk"]
-    # мова інтерфейсу, якщо є; інакше перша наявна
+    available = la["lang"].tolist() if not la.empty else ["uk"]
     sel_lang = ui_lang if ui_lang in available else available[0]
     if len(available) > 1:
         with fc2:
             names = {"uk": "Українська", "ru": "Русский", "en": "English"}
-            sel_lang = st.selectbox(
-                t("ai_text_lang"), available,
-                index=available.index(sel_lang),
-                format_func=lambda x: names.get(x, x), key="ai_lang")
-    elif ui_lang not in available:
-        with fc2:
-            st.caption(t("ai_lang_missing"))
+            sel_lang = st.selectbox(t("ai_text_lang"), available,
+                                    index=available.index(sel_lang),
+                                    format_func=lambda x: names.get(x, x),
+                                    key="ai_lang")
 
-with fc3:
+with fc4:
     st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-    if st.button(t("ai_refresh"), key="ai_refresh_btn", icon=":material/refresh:"):
+    if st.button(t("ai_refresh"), key="ai_refresh_btn",
+                 icon=":material/refresh:", use_container_width=True):
         try:
             q.clear()
             with get_conn().cursor() as cur:
@@ -100,16 +111,14 @@ with fc3:
         except Exception as e:
             st.error(f"{t('ai_refresh_failed')}: {e}")
 
-# статус останньої заявки — щоб було видно, що відбувається
 try:
-    last_job = q("""
-        SELECT status, requested_at, finished_at, message
-        FROM merinnovation.job_queue
+    lj = q("""
+        SELECT status, requested_at FROM merinnovation.job_queue
         WHERE script = '10_ai_analyst.py'
         ORDER BY requested_at DESC LIMIT 1
     """)
-    if not last_job.empty:
-        j = last_job.iloc[0]
+    if not lj.empty:
+        j = lj.iloc[0]
         age_min = (pd.Timestamp.now(tz="UTC")
                    - pd.to_datetime(j["requested_at"], utc=True)).total_seconds() / 60
         if j["status"] in ("pending", "running") and age_min < 30:
@@ -118,12 +127,13 @@ try:
 except Exception:
     pass
 
+# -------------------------------------------------------------- дані ----
 if lang_supported:
     insights = q("""
         SELECT DISTINCT ON (agent) agent, title, content, structured,
                model, created_at
         FROM merinnovation.ai_insights
-        WHERE report_date = %s AND COALESCE(lang, 'uk') = %s
+        WHERE report_date = %s AND COALESCE(lang,'uk') = %s
         ORDER BY agent, created_at DESC
     """, (sel_date, sel_lang))
 else:
@@ -131,8 +141,7 @@ else:
         SELECT DISTINCT ON (agent) agent, title, content, structured,
                model, created_at
         FROM merinnovation.ai_insights
-        WHERE report_date = %s
-        ORDER BY agent, created_at DESC
+        WHERE report_date = %s ORDER BY agent, created_at DESC
     """, (sel_date,))
 
 if insights.empty:
@@ -141,7 +150,6 @@ if insights.empty:
 
 
 def parsed_of(row) -> dict:
-    """structured може прийти як dict, як рядок JSON, або бути порожнім."""
     s = row.get("structured")
     if isinstance(s, dict):
         return s
@@ -154,122 +162,207 @@ def parsed_of(row) -> dict:
             "severity": "ok", "findings": [], "actions": []}
 
 
-# ============================================================ рендер ----
-
-def render_headline(d: dict, title: str, icon: str, big: bool = False):
-    color, sev_icon = SEV.get(d.get("severity", "ok"), SEV["ok"])
-    head = (d.get("headline") or "").replace("<", "&lt;")
-    size = "26px" if big else "18px"
-    pad = "26px 30px" if big else "18px 22px"
-    st.markdown(
-        f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
-        f'border-left:4px solid {color};border-radius:14px;'
-        f'padding:{pad};margin-bottom:14px;">'
-        f'<div style="color:{th["muted"]};font-size:11px;letter-spacing:.1em;'
-        f'text-transform:uppercase;margin-bottom:10px;font-weight:600;">'
-        f'{icon} {title}</div>'
-        f'<div style="color:{th["text"]};font-size:{size};font-weight:650;'
-        f'line-height:1.35;letter-spacing:-0.01em;">{sev_icon} {head}</div>'
-        f'</div>', unsafe_allow_html=True)
+def esc(x) -> str:
+    return str(x or "").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def render_findings(d: dict):
-    findings = d.get("findings") or []
-    if not findings:
-        return
-    rows = []
-    for f in findings:
-        arrow = {"up": "▲", "down": "▼"}.get(f.get("direction"), "")
-        a_color = {"up": ACCENT, "down": "#ef4444"}.get(
-            f.get("direction"), th["muted"])
-        text = (f.get("text") or "").replace("<", "&lt;")
-        metric = (f.get("metric") or "").replace("<", "&lt;")
-        metric_html = (
-            f'<span style="color:{a_color};font-weight:750;font-size:15px;'
-            f'white-space:nowrap;margin-left:18px;font-variant-numeric:'
-            f'tabular-nums;">{arrow} {metric}</span>' if metric else "")
-        rows.append(
-            f'<div style="display:flex;align-items:baseline;'
-            f'justify-content:space-between;gap:12px;padding:10px 0;'
-            f'border-bottom:1px solid {th["border"]};">'
-            f'<div style="color:{th["text"]};font-size:14px;line-height:1.5;">'
-            f'{text}</div>{metric_html}</div>')
-    st.markdown(
-        f'<div style="background:{th["card"]};border:1px solid {th["border"]};'
-        f'border-radius:12px;padding:4px 22px 8px 22px;margin-bottom:12px;">'
-        f'{"".join(rows)}</div>', unsafe_allow_html=True)
-
-
-def render_actions(d: dict):
-    actions = d.get("actions") or []
-    if not actions:
-        return
-    items = "".join(
-        f'<div style="padding:8px 0;color:{th["text"]};font-size:14px;'
-        f'line-height:1.5;">'
-        f'<span style="color:{ACCENT};font-weight:700;margin-right:10px;">→</span>'
-        f'{str(a).replace("<", "&lt;")}</div>' for a in actions)
-    st.markdown(
-        f'<div style="background:{ACCENT}0d;'
-        f'border:1px solid {ACCENT}44;border-radius:12px;'
-        f'padding:12px 22px;margin-bottom:20px;">'
-        f'<div style="color:{ACCENT};font-size:11px;letter-spacing:.1em;'
-        f'text-transform:uppercase;margin-bottom:4px;font-weight:700;">'
-        f'{t("ai_actions")}</div>{items}</div>', unsafe_allow_html=True)
-
-
-# ================================================== головна сводка ----
 main_row = insights[insights["agent"] == "main"]
-if not main_row.empty:
-    r = main_row.iloc[0]
-    d = parsed_of(r)
-    render_headline(d, t("ai_main_summary"), AGENT_ICONS["main"], big=True)
-    render_findings(d)
-    render_actions(d)
-    st.caption(f"{t('ai_model')}: {r['model']} · "
-               f"{pd.to_datetime(r['created_at']):%d.%m.%Y %H:%M}")
+main = parsed_of(main_row.iloc[0]) if not main_row.empty else None
 
-st.markdown("---")
+# ================================================== 1. ВЕРДИКТ ====
+if main:
+    color, icon = SEV.get(main.get("severity", "ok"), SEV["ok"])
+    label = {"critical": t("sev_critical"), "warning": t("sev_warning"),
+             "ok": t("sev_ok")}.get(main.get("severity", "ok"), "")
 
-# ================================================ опорні показники ----
-st.markdown(f"**{t('ai_supporting_data')}**")
+    st.markdown(
+        f'<div style="display:flex;gap:20px;align-items:stretch;'
+        f'margin:6px 0 4px 0;">'
+        # вертикальна смуга стану — як позначка на полях у звіті
+        f'<div style="width:5px;border-radius:3px;background:{color};'
+        f'flex-shrink:0;"></div>'
+        f'<div style="flex:1;">'
+        f'<div class="rp-eyebrow" style="color:{color};margin-bottom:12px;">'
+        f'{icon} {label} · {sel_date.strftime("%d.%m.%Y")}</div>'
+        f'<div style="color:{th["text"]};font-size:30px;font-weight:700;'
+        f'line-height:1.28;letter-spacing:-0.02em;max-width:1000px;">'
+        f'{esc(main.get("headline"))}</div>'
+        f'</div></div>', unsafe_allow_html=True)
 
-kpi = q("""
-    SELECT
-      (SELECT COUNT(*) FROM merinnovation.orders
-        WHERE purchase_date >= NOW() - INTERVAL '7 days'
-          AND order_status <> 'Canceled') AS orders_7d,
-      (SELECT COUNT(*) FROM merinnovation.orders
-        WHERE purchase_date >= NOW() - INTERVAL '14 days'
-          AND purchase_date < NOW() - INTERVAL '7 days'
-          AND order_status <> 'Canceled') AS orders_prev_7d,
-      (SELECT COUNT(*) FROM merinnovation.forecast_sku
-        WHERE velocity_weighted > 0 AND fulfillable = 0) AS stockouts,
-      (SELECT COUNT(*) FROM merinnovation.forecast_sku
-        WHERE status = 'REORDER_NOW') AS reorder_now,
-      (SELECT COALESCE(SUM(recommended_qty), 0) FROM merinnovation.forecast_sku
-        WHERE status IN ('REORDER_NOW','OUT_OF_STOCK')) AS units_to_order
+st.markdown('<div class="rp-rule"></div>', unsafe_allow_html=True)
+
+# ============================== 2. ГРОШОВИЙ РЕЄСТР (фірмовий блок) ====
+leak_ok = q("""
+    SELECT COUNT(*) AS n FROM information_schema.columns
+    WHERE table_schema='merinnovation' AND table_name='money_leaks'
+      AND column_name='category'
 """)
+has_leaks = not leak_ok.empty and int(leak_ok["n"].iloc[0]) > 0
 
-if not kpi.empty:
-    k = kpi.iloc[0]
-    o7, op7 = int(k["orders_7d"] or 0), int(k["orders_prev_7d"] or 0)
-    delta = (f"{abs((o7 - op7) / op7 * 100):.0f}%" if op7 else None)
-    up = o7 >= op7
+LEAK_LABELS = {
+    "STOCKOUT_NOW": t("leak_stockout_now"),
+    "STOCKOUT_SOON": t("leak_stockout_soon"),
+    "CONVERSION_GAP": t("leak_conversion"),
+    "REFUNDS": t("leak_refunds"),
+    "FEE_BURDEN": t("leak_fees"),
+    "DEAD_STOCK": t("leak_dead_stock"),
+}
 
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        metric_card(t("ai_orders_7d"), f"{o7:,}", delta=delta, delta_up=up,
-                    sub=f"{t('ai_prev')}: {op7:,}")
-    with c2:
-        metric_card(t("ai_stockouts"), f"{int(k['stockouts'] or 0)}",
-                    sub=t("ai_stockouts_sub"))
-    with c3:
-        metric_card(t("ai_reorder_now"), f"{int(k['reorder_now'] or 0)}")
-    with c4:
-        metric_card(t("ai_units_to_order"), f"{int(k['units_to_order'] or 0):,}")
+if has_leaks:
+    by_type = q("""
+        SELECT category, leak_type, COUNT(*) AS sku_count, SUM(amount_usd) AS usd
+        FROM merinnovation.money_leaks GROUP BY 1,2 ORDER BY 4 DESC
+    """)
+    if not by_type.empty:
+        lost = by_type[by_type["category"] == "lost_revenue"]
+        frozen = by_type[by_type["category"] == "frozen_capital"]
+        tot_lost = float(lost["usd"].sum()) if not lost.empty else 0.0
+        tot_frozen = float(frozen["usd"].sum()) if not frozen.empty else 0.0
 
-# графік динаміки замовлень
+        # рядки розкладки втрат
+        breakdown = "".join(
+            f'<div style="display:flex;justify-content:space-between;'
+            f'align-items:baseline;padding:7px 0;">'
+            f'<span style="color:{th["muted"]};font-size:13px;">'
+            f'{LEAK_LABELS.get(r["leak_type"], r["leak_type"])}'
+            f'<span style="opacity:.6;"> · {int(r["sku_count"])} SKU</span></span>'
+            f'<span class="rp-num" style="color:{th["text"]};font-size:14px;'
+            f'font-weight:600;">${float(r["usd"]):,.0f}</span></div>'
+            for _, r in lost.sort_values("usd", ascending=False).iterrows())
+
+        st.markdown(
+            f'<div style="display:grid;grid-template-columns:1.15fr 1fr;'
+            f'gap:18px;margin-bottom:8px;">'
+
+            # ліворуч: втрачено — головна цифра звіту
+            f'<div style="border:1px solid {RED}44;border-radius:16px;'
+            f'padding:22px 26px;background:{th["card"]};">'
+            f'<div class="rp-eyebrow">{t("leaks_lost_title")}</div>'
+            f'<div class="rp-num" style="color:{RED};font-size:44px;'
+            f'font-weight:800;line-height:1.05;margin:10px 0 2px 0;'
+            f'letter-spacing:-0.03em;">${tot_lost:,.0f}</div>'
+            f'<div style="color:{th["muted"]};font-size:12px;'
+            f'margin-bottom:14px;">{t("leaks_lost_note")}</div>'
+            f'<div style="border-top:1px solid {th["border"]};padding-top:6px;">'
+            f'{breakdown}</div></div>'
+
+            # праворуч: заморожено — навмисно тихіше, це не втрата
+            f'<div style="border:1px solid {th["border"]};border-radius:16px;'
+            f'padding:22px 26px;background:{th["card"]};">'
+            f'<div class="rp-eyebrow">{t("leaks_frozen_title")}</div>'
+            f'<div class="rp-num" style="color:{ACCENT2};font-size:44px;'
+            f'font-weight:800;line-height:1.05;margin:10px 0 2px 0;'
+            f'letter-spacing:-0.03em;">${tot_frozen:,.0f}</div>'
+            f'<div style="color:{th["muted"]};font-size:12px;">'
+            f'{t("leaks_frozen_note")}</div>'
+            f'<div style="margin-top:18px;padding-top:14px;'
+            f'border-top:1px solid {th["border"]};color:{th["muted"]};'
+            f'font-size:12px;line-height:1.6;">{t("leaks_frozen_hint")}</div>'
+            f'</div></div>', unsafe_allow_html=True)
+
+# ================================================ 3. ЩО РОБИТИ ====
+if main and (main.get("actions") or []):
+    st.markdown('<div class="rp-rule"></div>', unsafe_allow_html=True)
+    items = "".join(
+        f'<div style="display:flex;gap:14px;align-items:flex-start;'
+        f'padding:12px 0;border-bottom:1px solid {th["border"]};">'
+        f'<span class="rp-num" style="color:{ACCENT};font-weight:800;'
+        f'font-size:13px;min-width:22px;padding-top:1px;">{i:02d}</span>'
+        f'<span style="color:{th["text"]};font-size:15px;line-height:1.5;">'
+        f'{esc(a)}</span></div>'
+        for i, a in enumerate(main["actions"], 1))
+    st.markdown(
+        f'<div class="rp-eyebrow" style="color:{ACCENT};margin-bottom:6px;">'
+        f'{t("ai_actions")}</div>'
+        f'<div style="border-left:3px solid {ACCENT};padding-left:20px;">'
+        f'{items}</div>', unsafe_allow_html=True)
+
+# ================================================== 4. ДОКАЗИ ====
+if main and (main.get("findings") or []):
+    st.markdown('<div class="rp-rule"></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="rp-eyebrow" style="margin-bottom:8px;">'
+                f'{t("ai_evidence")}</div>', unsafe_allow_html=True)
+
+    rows = []
+    for f in main["findings"]:
+        d = f.get("direction")
+        arrow = {"up": "▲", "down": "▼"}.get(d, "")
+        col = {"up": ACCENT, "down": RED}.get(d, th["muted"])
+        metric = esc(f.get("metric"))
+        rows.append(
+            f'<div style="display:flex;justify-content:space-between;'
+            f'align-items:baseline;gap:24px;padding:13px 0;'
+            f'border-bottom:1px solid {th["border"]};">'
+            f'<span style="color:{th["text"]};font-size:15px;line-height:1.5;">'
+            f'{esc(f.get("text"))}</span>'
+            + (f'<span class="rp-num" style="color:{col};font-weight:750;'
+               f'font-size:17px;white-space:nowrap;">{arrow} {metric}</span>'
+               if metric else "")
+            + '</div>')
+    st.markdown("".join(rows), unsafe_allow_html=True)
+
+# ============================================= 5. ЗА НАПРЯМАМИ ====
+others = insights[insights["agent"] != "main"].copy()
+if not others.empty:
+    st.markdown('<div class="rp-rule"></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="rp-eyebrow" style="margin-bottom:14px;">'
+                f'{t("ai_by_agent")}</div>', unsafe_allow_html=True)
+
+    others["ord"] = others["agent"].apply(
+        lambda a: AGENT_ORDER.index(a) if a in AGENT_ORDER else 99)
+    others = others.sort_values("ord")
+
+    for _, row in others.iterrows():
+        d = parsed_of(row)
+        color, icon = SEV.get(d.get("severity", "ok"), SEV["ok"])
+        title = esc(row["title"])
+        head = esc(d.get("headline"))
+
+        with st.expander(f"{AGENT_ICONS.get(row['agent'], '•')} {title}",
+                         expanded=False):
+            st.markdown(
+                f'<div style="border-left:3px solid {color};padding-left:16px;'
+                f'margin-bottom:14px;">'
+                f'<div style="color:{th["text"]};font-size:16px;'
+                f'font-weight:600;line-height:1.4;">{head}</div></div>',
+                unsafe_allow_html=True)
+
+            fr = []
+            for f in (d.get("findings") or []):
+                dd = f.get("direction")
+                arrow = {"up": "▲", "down": "▼"}.get(dd, "")
+                col = {"up": ACCENT, "down": RED}.get(dd, th["muted"])
+                metric = esc(f.get("metric"))
+                fr.append(
+                    f'<div style="display:flex;justify-content:space-between;'
+                    f'align-items:baseline;gap:18px;padding:9px 0;'
+                    f'border-bottom:1px solid {th["border"]};">'
+                    f'<span style="color:{th["text"]};font-size:14px;'
+                    f'line-height:1.5;">{esc(f.get("text"))}</span>'
+                    + (f'<span class="rp-num" style="color:{col};'
+                       f'font-weight:700;white-space:nowrap;">'
+                       f'{arrow} {metric}</span>' if metric else "")
+                    + '</div>')
+            if fr:
+                st.markdown("".join(fr), unsafe_allow_html=True)
+
+            acts = d.get("actions") or []
+            if acts:
+                st.markdown(
+                    f'<div style="margin-top:12px;color:{ACCENT};'
+                    f'font-size:11px;letter-spacing:.12em;'
+                    f'text-transform:uppercase;font-weight:700;">'
+                    f'{t("ai_actions")}</div>'
+                    + "".join(
+                        f'<div style="color:{th["text"]};font-size:14px;'
+                        f'padding:6px 0;">→ {esc(a)}</div>' for a in acts),
+                    unsafe_allow_html=True)
+
+# ============================================ 6. ОПОРНІ ЦИФРИ ====
+st.markdown('<div class="rp-rule"></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="rp-eyebrow" style="margin-bottom:10px;">'
+            f'{t("ai_supporting_data")}</div>', unsafe_allow_html=True)
+
 daily = q("""
     SELECT purchase_date::date AS day, COUNT(*) AS orders
     FROM merinnovation.orders
@@ -282,217 +375,45 @@ if not daily.empty:
     fig = go.Figure(go.Bar(x=daily["label"], y=daily["orders"],
                            marker_color=ACCENT))
     lk = plotly_layout(title=t("ai_orders_chart"))
-    lk["height"] = 260
+    lk["height"] = 240
     lk["xaxis"] = themed_axis(type="category", showgrid=False)
     fig.update_layout(**lk)
     st.plotly_chart(fig, use_container_width=True)
 
-st.markdown("---")
+if not main_row.empty:
+    r = main_row.iloc[0]
+    st.caption(f"{t('ai_model')}: {r['model']} · "
+               f"{pd.to_datetime(r['created_at']):%d.%m.%Y %H:%M}")
 
-# ================================================== ДЕ ТЕЧУТЬ ГРОШІ ----
-# Перевіряємо не лише таблицю, а й КОЛОНКУ: якщо лоадер ще старої версії,
-# category немає, і сторінка падала б трейсбеком замість спокійного напису.
-leaks_exist = q("""
-    SELECT COUNT(*) AS n FROM information_schema.columns
-    WHERE table_schema='merinnovation' AND table_name='money_leaks'
-      AND column_name='category'
-""")
-has_leaks = not leaks_exist.empty and int(leaks_exist["n"].iloc[0]) > 0
-
-if not has_leaks:
-    table_only = q("""
-        SELECT COUNT(*) AS n FROM information_schema.tables
-        WHERE table_schema='merinnovation' AND table_name='money_leaks'
-    """)
-    if not table_only.empty and int(table_only["n"].iloc[0]) > 0:
-        st.info(t("leaks_need_rerun"))
-
-if has_leaks:
-    by_type = q("""
-        SELECT category, leak_type, COUNT(*) AS sku_count, SUM(amount_usd) AS usd
-        FROM merinnovation.money_leaks
-        GROUP BY 1, 2 ORDER BY 4 DESC
-    """)
-
-    if not by_type.empty:
-        lost = by_type[by_type["category"] == "lost_revenue"]
-        frozen = by_type[by_type["category"] == "frozen_capital"]
-        total_lost = float(lost["usd"].sum()) if not lost.empty else 0.0
-        total_frozen = float(frozen["usd"].sum()) if not frozen.empty else 0.0
-
-        LEAK_LABELS = {
-            "STOCKOUT_NOW": t("leak_stockout_now"),
-            "STOCKOUT_SOON": t("leak_stockout_soon"),
-            "CONVERSION_GAP": t("leak_conversion"),
-            "REFUNDS": t("leak_refunds"),
-            "FEE_BURDEN": t("leak_fees"),
-            "DEAD_STOCK": t("leak_dead_stock"),
-        }
-
-        # дві картки: втрачене і заморожене — принципово різні речі
-        hl, hr = st.columns([1, 1])
-        with hl:
-            st.markdown(
-                f'<div style="background:{th["card"]};'
-                f'border:1px solid #ef444455;border-left:4px solid #ef4444;'
-                f'border-radius:14px;padding:20px 24px;height:100%;">'
-                f'<div style="color:{th["muted"]};font-size:12px;'
-                f'letter-spacing:.08em;text-transform:uppercase;'
-                f'margin-bottom:8px;">💸 {t("leaks_lost_title")}</div>'
-                f'<div style="color:#ef4444;font-size:32px;font-weight:800;'
-                f'line-height:1.1;">${total_lost:,.0f}</div>'
-                f'<div style="color:{th["muted"]};font-size:12px;'
-                f'margin-top:6px;">{t("leaks_lost_note")}</div></div>',
-                unsafe_allow_html=True)
-        with hr:
-            st.markdown(
-                f'<div style="background:{th["card"]};'
-                f'border:1px solid {ACCENT2}55;border-left:4px solid {ACCENT2};'
-                f'border-radius:14px;padding:20px 24px;height:100%;">'
-                f'<div style="color:{th["muted"]};font-size:12px;'
-                f'letter-spacing:.08em;text-transform:uppercase;'
-                f'margin-bottom:8px;">🧊 {t("leaks_frozen_title")}</div>'
-                f'<div style="color:{ACCENT2};font-size:32px;font-weight:800;'
-                f'line-height:1.1;">${total_frozen:,.0f}</div>'
-                f'<div style="color:{th["muted"]};font-size:12px;'
-                f'margin-top:6px;">{t("leaks_frozen_note")}</div></div>',
-                unsafe_allow_html=True)
-
-        st.markdown("")
-
-        # розбивка втрат за типом
-        if not lost.empty:
-            lc, rc = st.columns([1, 1])
-            with lc:
-                b = lost.copy()
-                b["label"] = b["leak_type"].map(lambda x: LEAK_LABELS.get(x, x))
-                b = b.sort_values("usd")
-                figl = go.Figure(go.Bar(
-                    x=b["usd"], y=b["label"], orientation="h",
-                    marker_color="#ef4444",
-                    text=[f"${v:,.0f}" for v in b["usd"]],
-                    textposition="outside"))
-                lk = plotly_layout(title=t("leaks_by_type"))
-                lk["height"] = 280
-                lk["yaxis"] = themed_axis(type="category")
-                figl.update_layout(**lk)
-                st.plotly_chart(figl, use_container_width=True)
-
-            with rc:
-                rows = []
-                for _, r in lost.sort_values("usd", ascending=False).iterrows():
-                    label = LEAK_LABELS.get(r["leak_type"], r["leak_type"])
-                    share = (float(r["usd"]) / total_lost * 100
-                             if total_lost else 0)
-                    rows.append(
-                        f'<div style="padding:12px 0;border-bottom:1px solid '
-                        f'{th["border"]};">'
-                        f'<div style="display:flex;justify-content:space-between;'
-                        f'align-items:baseline;">'
-                        f'<span style="color:{th["text"]};font-size:14px;">'
-                        f'{label}</span>'
-                        f'<span style="color:#ef4444;font-weight:700;'
-                        f'font-size:16px;white-space:nowrap;margin-left:12px;">'
-                        f'${float(r["usd"]):,.0f}</span></div>'
-                        f'<div style="color:{th["muted"]};font-size:12px;'
-                        f'margin-top:3px;">{int(r["sku_count"])} SKU · '
-                        f'{share:.0f}% {t("leaks_of_total")}</div></div>')
-                st.markdown(
-                    f'<div style="background:{th["card"]};'
-                    f'border:1px solid {th["border"]};border-radius:12px;'
-                    f'padding:4px 20px 8px 20px;">{"".join(rows)}</div>',
-                    unsafe_allow_html=True)
-
-        # топ саме втрат — список для дії
-        st.markdown("")
-        st.markdown(f"**{t('leaks_top_positions')}**")
-
-        top_leaks = q("""
-            SELECT leak_type, seller_sku, asin, amount_usd, detail
-            FROM merinnovation.money_leaks
-            WHERE category = 'lost_revenue'
-            ORDER BY amount_usd DESC LIMIT 15
-        """)
-
-        if top_leaks.empty:
-            st.caption(t("leaks_none"))
-        else:
-            items = []
-            for _, r in top_leaks.iterrows():
-                det = r["detail"]
-                if isinstance(det, str):
-                    try:
-                        det = json.loads(det)
-                    except Exception:
-                        det = {}
-                det = det or {}
-                reason = str(det.get("reason", "")).replace("<", "&lt;")
-                label = LEAK_LABELS.get(r["leak_type"], r["leak_type"])
-                sku = str(r["seller_sku"] or "")[:32]
-                items.append(
-                    f'<div style="padding:13px 0;border-bottom:1px solid '
-                    f'{th["border"]};">'
-                    f'<div style="display:flex;justify-content:space-between;'
-                    f'align-items:baseline;gap:12px;">'
-                    f'<span style="color:{th["text"]};font-weight:600;'
-                    f'font-size:14px;">{sku}</span>'
-                    f'<span style="color:#ef4444;font-weight:700;'
-                    f'white-space:nowrap;">${float(r["amount_usd"]):,.0f}</span>'
-                    f'</div>'
-                    f'<div style="color:{th["muted"]};font-size:12px;'
-                    f'margin-top:4px;">{label} · {reason}</div></div>')
-            st.markdown(
-                f'<div style="background:{th["card"]};'
-                f'border:1px solid {th["border"]};border-radius:12px;'
-                f'padding:4px 20px 8px 20px;">{"".join(items)}</div>',
-                unsafe_allow_html=True)
-
-    st.markdown("---")
-
-# ============================================== розділи за напрямами ----
-others = insights[insights["agent"] != "main"].copy()
-if not others.empty:
-    others["order"] = others["agent"].apply(
-        lambda a: AGENT_ORDER.index(a) if a in AGENT_ORDER else 99)
-    others = others.sort_values("order")
-
-    records = others.to_dict("records")
-    for i in range(0, len(records), 2):
-        cols = st.columns(2)
-        for col, row in zip(cols, records[i:i + 2]):
-            with col:
-                d = parsed_of(row)
-                icon = AGENT_ICONS.get(row["agent"], "•")
-                render_headline(d, row["title"], icon)
-                render_findings(d)
-                render_actions(d)
-
-# ----------------------------------------------------------- історія ----
+# ------------------------------------------------------------ історія ----
 with st.expander(t("ai_history")):
     if lang_supported:
         hist = q("""
             SELECT report_date, structured, content
             FROM merinnovation.ai_insights
-            WHERE agent = 'main' AND COALESCE(lang, 'uk') = %s
+            WHERE agent='main' AND COALESCE(lang,'uk')=%s
             ORDER BY created_at DESC LIMIT 14
         """, (sel_lang,))
     else:
         hist = q("""
             SELECT report_date, structured, content
             FROM merinnovation.ai_insights
-            WHERE agent = 'main'
-            ORDER BY created_at DESC LIMIT 14
+            WHERE agent='main' ORDER BY created_at DESC LIMIT 14
         """)
     if hist.empty:
         st.caption(t("no_ai_data"))
     else:
         for _, r in hist.iterrows():
             d = parsed_of(r)
-            day = pd.to_datetime(r["report_date"]).strftime("%d.%m.%Y")
-            _, sev_icon = SEV.get(d.get("severity", "ok"), SEV["ok"])
-            st.markdown(f"**{day}** {sev_icon} {d.get('headline', '')}")
-            for f in (d.get("findings") or [])[:3]:
-                st.caption(f"· {f.get('text', '')}")
-            st.markdown("---")
+            day = pd.to_datetime(r["report_date"]).strftime("%d.%m")
+            color, icon = SEV.get(d.get("severity", "ok"), SEV["ok"])
+            st.markdown(
+                f'<div style="display:flex;gap:14px;padding:10px 0;'
+                f'border-bottom:1px solid {th["border"]};">'
+                f'<span class="rp-num" style="color:{th["muted"]};'
+                f'font-size:13px;min-width:44px;">{day}</span>'
+                f'<span style="color:{th["text"]};font-size:14px;'
+                f'line-height:1.5;">{icon} {esc(d.get("headline"))}</span>'
+                f'</div>', unsafe_allow_html=True)
 
 st.caption(t("ai_cache_note"))
