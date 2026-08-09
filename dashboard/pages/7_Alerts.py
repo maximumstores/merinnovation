@@ -65,10 +65,15 @@ with c3:
 
 st.markdown("")
 
-if open_alerts.empty:
+info_alerts = (open_alerts[open_alerts["level"] == "INFO"]
+               if not open_alerts.empty else open_alerts)
+action_alerts = (open_alerts[open_alerts["level"] != "INFO"]
+                 if not open_alerts.empty else open_alerts)
+
+if action_alerts.empty:
     st.success(t("alerts_all_clear"))
 else:
-    for _, r in open_alerts.iterrows():
+    for _, r in action_alerts.iterrows():
         color, icon = LEVEL.get(r["level"], LEVEL["INFO"])
         hours = float(r["hours_open"] or 0)
         dur = (f"{hours:.0f} {t('alerts_hours')}" if hours < 48
@@ -86,6 +91,13 @@ else:
             f'{t("alerts_ongoing")} {dur} · {t("alerts_seen")} '
             f'{int(r["occurrences"])} · <code>{code}</code></div></div>',
             unsafe_allow_html=True)
+
+# --------------------------------------------------------------- INFO ----
+if not info_alerts.empty:
+    with st.expander(f"{t('alerts_info_block')} ({len(info_alerts)})"):
+        st.caption(t("alerts_info_note"))
+        for _, r in info_alerts.iterrows():
+            st.markdown(f"🔵 {r['message']}")
 
 # ------------------------------------------------------------ історія ----
 st.markdown("")
