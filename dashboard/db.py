@@ -180,6 +180,8 @@ TRANSLATIONS = {
         "leak_dead_stock": "Заморожений запас",
         "nav_alerts": "Алерти", "alerts_title": "Алерти системи",
         "no_alerts_data": "Немає даних — запусти 12_watchdog.py",
+        "alerts_info_block": "Довідково",
+        "alerts_info_note": "Це не проблеми — просто стан системи. Дії не потребують.",
         "alerts_critical": "Потребує дії", "alerts_warning": "Увага",
         "alerts_need_action": "розібратись сьогодні",
         "alerts_last_check": "Остання перевірка",
@@ -357,6 +359,8 @@ TRANSLATIONS = {
         "leak_dead_stock": "Замороженный запас",
         "nav_alerts": "Алерты", "alerts_title": "Алерты системы",
         "no_alerts_data": "Нет данных — запусти 12_watchdog.py",
+        "alerts_info_block": "Справочно",
+        "alerts_info_note": "Это не проблемы — просто состояние системы. Действий не требуют.",
         "alerts_critical": "Требует действия", "alerts_warning": "Внимание",
         "alerts_need_action": "разобраться сегодня",
         "alerts_last_check": "Последняя проверка",
@@ -534,6 +538,8 @@ The total counts **matured dates only** — otherwise zeros from recent days wou
         "leak_dead_stock": "Dead stock",
         "nav_alerts": "Alerts", "alerts_title": "System alerts",
         "no_alerts_data": "No data — run 12_watchdog.py",
+        "alerts_info_block": "For reference",
+        "alerts_info_note": "Not problems — just system state. No action needed.",
         "alerts_critical": "Needs action", "alerts_warning": "Warning",
         "alerts_need_action": "handle today",
         "alerts_last_check": "Last check",
@@ -947,4 +953,4 @@ def sort_controls(options: dict, key: str, default_index: int = 0,
                              index=0 if default_desc else 1,
                              key=f"sort_ord_{key}")
     ascending = order == t("sort_asc")
-    return options[sel], ascending 
+    return options[sel], ascending
