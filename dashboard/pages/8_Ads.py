@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Merinnovation Dashboard — реклама (SP / SB / SD)."""
 
+import json
 import os
 import sys
 
@@ -10,8 +11,8 @@ import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from db import (ACCENT, ACCENT2, cur_theme, download_csv_button, inject_css,
-                lang_selector, metric_card, plotly_layout, q,
+from db import (ACCENT, ACCENT2, cur_theme, download_csv_button, get_conn,
+                inject_css, lang_selector, metric_card, plotly_layout, q,
                 render_html_table, sort_controls, t, themed_axis)
 
 st.set_page_config(layout="wide", page_title="Merinnovation · Ads", page_icon="🐑")
@@ -121,6 +122,109 @@ with c3:
 with c4:
     metric_card("CTR", f"{ctr:.2f}%" if ctr is not None else "—",
                 sub=f"{clicks:,} {t('ads_clicks')}")
+
+st.markdown("")
+
+# ------------------------------------------------- висновок ІІ ----
+ai_ok = q("""
+    SELECT COUNT(*) AS n FROM information_schema.tables
+    WHERE table_schema='merinnovation' AND table_name='ai_insights'
+""")
+if not ai_ok.empty and int(ai_ok["n"].iloc[0]) > 0:
+    ui_lang = st.session_state.get("lang", "uk")
+    try:
+        ai_row = q("""
+            SELECT structured, content, created_at
+            FROM merinnovation.ai_insights
+            WHERE agent = 'ads'
+            ORDER BY created_at DESC LIMIT 1
+        """)
+    except Exception:
+        ai_row = pd.DataFrame()
+
+    ac1, ac2 = st.columns([5, 1])
+    with ac2:
+        if st.button(t("ads_ai_refresh"), key="ads_ai_btn",
+                     icon=":material/auto_awesome:", use_container_width=True):
+            try:
+                q.clear()
+                with get_conn().cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO merinnovation.job_queue (script, requested_by)
+                        VALUES ('10_ai_analyst.py', 'dashboard_ads')
+                    """)
+                st.success(t("ai_refresh_queued"))
+            except Exception as e:
+                st.error(f"{t('ai_refresh_failed')}: {e}")
+
+    if not ai_row.empty:
+        r = ai_row.iloc[0]
+        s = r["structured"]
+        if isinstance(s, str) and s.strip():
+            try:
+                s = json.loads(s)
+            except Exception:
+                s = None
+        if not isinstance(s, dict):
+            s = {"headline": (r["content"] or "")[:400], "severity": "ok",
+                 "findings": [], "actions": []}
+
+        sev_color = {"critical": RED, "warning": AMBER}.get(
+            s.get("severity"), ACCENT)
+        sev_icon = {"critical": "🔴", "warning": "🟠"}.get(
+            s.get("severity"), "🟢")
+
+        def esc(x):
+            return str(x or "").replace("<", "&lt;").replace(">", "&gt;")
+
+        with ac1:
+            st.markdown(
+                f'<div style="border-left:4px solid {sev_color};'
+                f'background:{th["card"]};border:1px solid {th["border"]};'
+                f'border-radius:14px;padding:18px 22px;">'
+                f'<div style="color:{th["muted"]};font-size:11px;'
+                f'letter-spacing:.12em;text-transform:uppercase;'
+                f'font-weight:700;margin-bottom:8px;">🧠 {t("ads_ai_title")}</div>'
+                f'<div style="color:{th["text"]};font-size:17px;'
+                f'font-weight:650;line-height:1.4;">'
+                f'{sev_icon} {esc(s.get("headline"))}</div></div>',
+                unsafe_allow_html=True)
+
+        rows_f = []
+        for f in (s.get("findings") or []):
+            d = f.get("direction")
+            arrow = {"up": "▲", "down": "▼"}.get(d, "")
+            col = {"up": ACCENT, "down": RED}.get(d, th["muted"])
+            metric = esc(f.get("metric"))
+            rows_f.append(
+                f'<div style="display:flex;justify-content:space-between;'
+                f'align-items:baseline;gap:20px;padding:10px 0;'
+                f'border-bottom:1px solid {th["border"]};">'
+                f'<span style="color:{th["text"]};font-size:14px;">'
+                f'{esc(f.get("text"))}</span>'
+                + (f'<span style="color:{col};font-weight:700;'
+                   f'white-space:nowrap;font-variant-numeric:tabular-nums;">'
+                   f'{arrow} {metric}</span>' if metric else "")
+                + '</div>')
+        if rows_f:
+            st.markdown("".join(rows_f), unsafe_allow_html=True)
+
+        acts = s.get("actions") or []
+        if acts:
+            st.markdown(
+                f'<div style="margin-top:10px;border-left:3px solid {ACCENT};'
+                f'padding-left:18px;">'
+                + "".join(
+                    f'<div style="color:{th["text"]};font-size:14px;'
+                    f'padding:7px 0;"><span style="color:{ACCENT};'
+                    f'font-weight:700;margin-right:10px;">→</span>{esc(a)}</div>'
+                    for a in acts)
+                + '</div>', unsafe_allow_html=True)
+
+        st.caption(f"{pd.to_datetime(r['created_at']):%d.%m.%Y %H:%M}")
+    else:
+        with ac1:
+            st.caption(t("ads_ai_none"))
 
 st.markdown("")
 
