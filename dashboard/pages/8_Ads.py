@@ -131,14 +131,43 @@ ai_ok = q("""
     WHERE table_schema='merinnovation' AND table_name='ai_insights'
 """)
 if not ai_ok.empty and int(ai_ok["n"].iloc[0]) > 0:
+    # Беремо ОСТАННІЙ висновок агента незалежно від дати: якщо база в
+    # іншій часовій зоні, report_date може не збігтися з "сьогодні"
+    # у кабінеті, і блок виглядав би порожнім при наявних даних.
     ui_lang = st.session_state.get("lang", "uk")
+    ai_row = pd.DataFrame()
     try:
-        ai_row = q("""
-            SELECT structured, content, created_at
-            FROM merinnovation.ai_insights
-            WHERE agent = 'ads'
-            ORDER BY created_at DESC LIMIT 1
+        has_lang = q("""
+            SELECT COUNT(*) AS n FROM information_schema.columns
+            WHERE table_schema='merinnovation' AND table_name='ai_insights'
+              AND column_name='lang'
         """)
+        lang_ok = not has_lang.empty and int(has_lang["n"].iloc[0]) > 0
+
+        if lang_ok:
+            # спершу мовою інтерфейсу
+            ai_row = q("""
+                SELECT structured, content, created_at, COALESCE(lang,'uk') AS lang
+                FROM merinnovation.ai_insights
+                WHERE agent = 'ads' AND COALESCE(lang,'uk') = %s
+                ORDER BY created_at DESC LIMIT 1
+            """, (ui_lang,))
+            # якщо такої мови немає — беремо будь-яку останню
+            if ai_row.empty:
+                ai_row = q("""
+                    SELECT structured, content, created_at,
+                           COALESCE(lang,'uk') AS lang
+                    FROM merinnovation.ai_insights
+                    WHERE agent = 'ads'
+                    ORDER BY created_at DESC LIMIT 1
+                """)
+        else:
+            ai_row = q("""
+                SELECT structured, content, created_at, 'uk' AS lang
+                FROM merinnovation.ai_insights
+                WHERE agent = 'ads'
+                ORDER BY created_at DESC LIMIT 1
+            """)
     except Exception:
         ai_row = pd.DataFrame()
 
@@ -221,7 +250,11 @@ if not ai_ok.empty and int(ai_ok["n"].iloc[0]) > 0:
                     for a in acts)
                 + '</div>', unsafe_allow_html=True)
 
-        st.caption(f"{pd.to_datetime(r['created_at']):%d.%m.%Y %H:%M}")
+        cap = f"{pd.to_datetime(r['created_at']):%d.%m.%Y %H:%M}"
+        row_lang = r.get("lang", "uk")
+        if row_lang and row_lang != ui_lang:
+            cap += f" · {row_lang.upper()}"
+        st.caption(cap)
     else:
         with ac1:
             st.caption(t("ads_ai_none"))
