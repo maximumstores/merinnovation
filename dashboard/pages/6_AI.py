@@ -144,6 +144,35 @@ else:
         WHERE report_date = %s ORDER BY agent, created_at DESC
     """, (sel_date,))
 
+# Якщо за обрану дату/мову порожньо — не показуємо "немає даних",
+# а беремо останній наявний звіт. База може бути в іншій часовій зоні,
+# і report_date не збігається з "сьогодні" у кабінеті.
+if insights.empty and lang_supported:
+    insights = q("""
+        SELECT DISTINCT ON (agent) agent, title, content, structured,
+               model, created_at
+        FROM merinnovation.ai_insights
+        WHERE report_date = %s
+        ORDER BY agent, created_at DESC
+    """, (sel_date,))
+
+if insights.empty:
+    fallback = q("""
+        SELECT MAX(report_date) AS d FROM merinnovation.ai_insights
+    """)
+    if not fallback.empty and pd.notna(fallback["d"].iloc[0]):
+        real_date = pd.to_datetime(fallback["d"].iloc[0]).date()
+        insights = q("""
+            SELECT DISTINCT ON (agent) agent, title, content, structured,
+                   model, created_at
+            FROM merinnovation.ai_insights
+            WHERE report_date = %s
+            ORDER BY agent, created_at DESC
+        """, (real_date,))
+        if not insights.empty and real_date != sel_date:
+            st.caption(t("ai_showing_date").format(
+                d=real_date.strftime("%d.%m.%Y")))
+
 if insights.empty:
     st.info(t("no_ai_data"))
     st.stop()
