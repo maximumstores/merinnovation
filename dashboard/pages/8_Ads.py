@@ -267,7 +267,14 @@ if not ai_ok.empty and int(ai_ok["n"].iloc[0]) > 0:
     # повідомлення — на всю ширину, інакше воно розтягує вузьку колонку
     # кнопки на сім рядків і ламає верстку
     if queued_msg:
-        st.success(queued_msg, icon="⏳")
+        # Один агент відпрацьовує за 10-20 секунд. Чекаємо і перезавантажуємо
+        # сторінку самі — інакше користувач бачить порожній блок і не розуміє,
+        # чи щось узагалі відбувається.
+        import time as _time
+        with st.spinner(t("ads_ai_working")):
+            _time.sleep(25)
+        q.clear()
+        st.rerun()
     if queued_err:
         st.error(f"{t('ai_refresh_failed')}: {queued_err}")
 
