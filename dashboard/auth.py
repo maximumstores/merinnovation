@@ -402,6 +402,13 @@ button[kind="secondary"], button[kind="secondary"] * {{
 }}
 button[kind="secondary"]:hover {{ border-color: {ACCENT} !important; }}
 
+button[kind="secondaryFormSubmit"],
+button[kind="secondaryFormSubmit"] * {{
+    background-color: {th["card"]} !important;
+    color: {th["text"]} !important;
+    border-color: {th["border"]} !important;
+}}
+
 /* Кнопка "показати пароль" — той самий фон, що й поле */
 [data-testid="stTextInput"] button,
 [data-testid="stTextInput"] button * {{
