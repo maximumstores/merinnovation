@@ -260,8 +260,92 @@ def _session_valid() -> bool:
     return (datetime.now(timezone.utc) - ts) < timedelta(hours=SESSION_HOURS)
 
 
+def _login_css():
+    """На екрані входу Streamlit малює власну навігацію зі СИРИМИ іменами
+    файлів (app, Stock, Users...) — наш сайдбар з'являється лише після
+    авторизації. Ховаємо цей службовий вигляд, щоб чужа людина не бачила
+    структуру застосунку до входу."""
+    from db import cur_theme
+    th = cur_theme()
+    st.markdown(f"""
+<style>
+[data-testid="stSidebarNav"] {{ display: none !important; }}
+[data-testid="stToolbar"] {{ display: none !important; }}
+[data-testid="stDecoration"] {{ display: none !important; }}
+[data-testid="stStatusWidget"] {{ display: none !important; }}
+#MainMenu {{ visibility: hidden !important; }}
+[data-testid="stAppDeployButton"] {{ display: none !important; }}
+.stAppDeployButton, .stDeployButton {{ display: none !important; }}
+[data-testid="stHeaderActionElements"] {{ display: none !important; }}
+header[data-testid="stHeader"] {{ background: transparent !important; }}
+footer {{ visibility: hidden !important; }}
+.stApp {{ background: {th["bg"]} !important; }}
+[data-testid="stSidebar"] {{ background: {th["sidebar"]} !important; }}
+.stApp, .stApp p, .stApp span, .stApp label {{ color: {th["text"]} !important; }}
+[data-testid="stTextInput"] input {{
+    background-color: {th["card"]} !important;
+    color: {th["text"]} !important;
+    border-color: {th["border"]} !important;
+}}
+</style>
+""", unsafe_allow_html=True)
+
+
+def _login_sidebar():
+    """Логотип і вибір мови/теми — доступні ще до входу."""
+    from db import (LANGS, LANG_LABELS, _logo_b64, ACCENT)
+
+    if "lang" not in st.session_state:
+        st.session_state["lang"] = "uk"
+    if "theme" not in st.session_state:
+        st.session_state["theme"] = "dark"
+
+    with st.sidebar:
+        b64 = _logo_b64()
+        if b64:
+            from db import cur_theme
+            th = cur_theme()
+            st.markdown(
+                f'<div style="padding: 8px 0 20px 0; text-align:center;">'
+                f'<img src="data:image/png;base64,{b64}" '
+                f'style="max-width:170px;width:100%;'
+                f'filter:{th["logo_filter"]};" /></div>',
+                unsafe_allow_html=True)
+
+        cols = st.columns(3)
+        for i, code in enumerate(LANGS):
+            with cols[i]:
+                if st.button(LANG_LABELS[code], key=f"login_lang_{code}",
+                             type=("primary"
+                                   if st.session_state["lang"] == code
+                                   else "secondary"),
+                             use_container_width=True):
+                    st.session_state["lang"] = code
+                    st.rerun()
+
+        tc1, tc2 = st.columns(2)
+        with tc1:
+            if st.button("Dark", key="login_th_dark", use_container_width=True,
+                         icon=":material/dark_mode:",
+                         type=("primary"
+                               if st.session_state["theme"] == "dark"
+                               else "secondary")):
+                st.session_state["theme"] = "dark"
+                st.rerun()
+        with tc2:
+            if st.button("Light", key="login_th_light", use_container_width=True,
+                         icon=":material/light_mode:",
+                         type=("primary"
+                               if st.session_state["theme"] == "light"
+                               else "secondary")):
+                st.session_state["theme"] = "light"
+                st.rerun()
+
+
 def _login_form():
-    from db import ACCENT, cur_theme
+    from db import ACCENT, cur_theme, t
+    _login_css()
+    _login_sidebar()
     th = cur_theme()
 
     st.markdown(
@@ -269,24 +353,25 @@ def _login_form():
         f'<div style="color:{th["text"]};font-size:30px;font-weight:700;'
         f'letter-spacing:-0.02em;margin-bottom:6px;">Merinnovation</div>'
         f'<div style="color:{th["muted"]};font-size:14px;margin-bottom:24px;">'
-        f'Аналітичний кабінет</div></div>', unsafe_allow_html=True)
+        f'{t("login_subtitle")}</div></div>', unsafe_allow_html=True)
 
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
         with st.form("login_form"):
-            username = st.text_input("Логін", key="li_user")
-            password = st.text_input("Пароль", type="password", key="li_pass")
-            submitted = st.form_submit_button("Увійти", type="primary",
+            username = st.text_input(t("login_user"), key="li_user")
+            password = st.text_input(t("login_pass"), type="password",
+                                     key="li_pass")
+            submitted = st.form_submit_button(t("login_btn"), type="primary",
                                               use_container_width=True)
 
         if submitted:
             u = (username or "").strip().lower()
             if not u or not password:
-                st.error("Введи логін і пароль")
+                st.error(t("login_empty"))
                 return
 
             if too_many_attempts(u):
-                st.error("Забагато невдалих спроб. Спробуй за 15 хвилин.")
+                st.error(t("login_throttled"))
                 return
 
             user = get_user(u)
@@ -294,12 +379,12 @@ def _login_form():
                 log_attempt(u, False)
                 # навмисно не уточнюємо, що саме невірне — щоб не давати
                 # підказку про існування логіна
-                st.error("Невірний логін або пароль")
+                st.error(t("login_bad"))
                 return
 
             if not user["is_active"]:
                 log_attempt(u, False)
-                st.error("Доступ вимкнено. Зверніться до адміністратора.")
+                st.error(t("login_disabled"))
                 return
 
             log_attempt(u, True)
@@ -313,27 +398,29 @@ def _login_form():
 
 
 def _change_password_form():
-    from db import cur_theme
+    from db import cur_theme, t
+    _login_css()
+    _login_sidebar()
     th = cur_theme()
-    st.warning("Потрібно змінити пароль перед роботою")
+    st.warning(t("pw_required"))
 
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
         with st.form("chpass"):
-            p1 = st.text_input("Новий пароль", type="password")
-            p2 = st.text_input("Повторіть пароль", type="password")
-            ok = st.form_submit_button("Зберегти", type="primary",
+            p1 = st.text_input(t("pw_new"), type="password")
+            p2 = st.text_input(t("pw_repeat"), type="password")
+            ok = st.form_submit_button(t("pw_save"), type="primary",
                                        use_container_width=True)
         if ok:
             if len(p1) < 8:
-                st.error("Пароль має бути не коротшим за 8 символів")
+                st.error(t("pw_short"))
             elif p1 != p2:
-                st.error("Паролі не збігаються")
+                st.error(t("pw_mismatch"))
             else:
                 set_password(st.session_state["auth_user"], p1,
                              force_change=False)
                 st.session_state["auth_must_change"] = False
-                st.success("Пароль змінено")
+                st.success(t("pw_changed"))
                 st.rerun()
 
 
@@ -358,8 +445,9 @@ def require_auth(page: str = None):
     role = st.session_state.get("auth_role", "user")
 
     # сторінки тільки для адміна
+    from db import t
     if page and page in ADMIN_ONLY_PAGES and role != "admin":
-        st.error("Ця сторінка доступна лише адміністратору")
+        st.error(t("admin_only"))
         st.stop()
 
     return {
@@ -371,7 +459,7 @@ def require_auth(page: str = None):
 
 def sidebar_user_block():
     """Блок користувача в сайдбарі: хто увійшов і кнопка виходу."""
-    from db import cur_theme
+    from db import cur_theme, t
     th = cur_theme()
     user = st.session_state.get("auth_name") or st.session_state.get("auth_user")
     role = st.session_state.get("auth_role", "user")
@@ -383,11 +471,11 @@ def sidebar_user_block():
         st.markdown(
             f'<div style="color:{th["muted"]};font-size:11px;'
             f'letter-spacing:.1em;text-transform:uppercase;">'
-            f'{"Адміністратор" if role == "admin" else "Користувач"}</div>'
+            f'{t("role_admin") if role == "admin" else t("role_user")}</div>'
             f'<div style="color:{th["text"]};font-size:14px;'
             f'font-weight:600;margin-bottom:8px;">{user}</div>',
             unsafe_allow_html=True)
-        if st.button("Вийти", key="logout_btn", use_container_width=True,
+        if st.button(t("logout"), key="logout_btn", use_container_width=True,
                      icon=":material/logout:"):
             for k in ("auth_user", "auth_role", "auth_name", "auth_at",
                       "auth_must_change"):
