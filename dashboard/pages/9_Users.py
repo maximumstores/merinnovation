@@ -45,26 +45,29 @@ st.markdown("")
 
 # ------------------------------------------------- власний пароль ----
 with st.expander("🔑 Мій пароль"):
-    st.caption("Ти вже увійшов у систему, тому старий пароль не потрібен. "
-               "Впиши новий або згенеруй.")
+    st.caption("Ти вже увійшов у систему, тому старий пароль не потрібен.")
 
-    if st.button("Згенерувати", key="gen_own_pw",
-                 icon=":material/casino:"):
-        st.session_state["own_pw_value"] = auth.generate_password()
-        st.rerun()
+    # Форма без st.form: усередині form кнопка "Згенерувати" не може
+    # оновити поле — форма надсилається цілком, а не по кнопці.
+    gc1, gc2 = st.columns([1, 3])
+    with gc1:
+        if st.button("Згенерувати", key="gen_own_pw",
+                     icon=":material/casino:", use_container_width=True):
+            st.session_state["own_pw_gen"] = auth.generate_password()
+            st.rerun()
 
-    with st.form("own_pw"):
-        oc1, oc2 = st.columns([3, 1])
-        with oc1:
-            new_pw = st.text_input(
-                "Новий пароль",
-                value=st.session_state.get("own_pw_value", ""),
-                key="own_pw_input")
-        with oc2:
-            st.markdown("<div style='height:28px'></div>",
-                        unsafe_allow_html=True)
-            save_own = st.form_submit_button("Зберегти", type="primary",
-                                             use_container_width=True)
+    pc1, pc2 = st.columns([3, 1])
+    with pc1:
+        # без key: значення підставляємо через value, інакше Streamlit
+        # ігнорує його на користь збереженого стану віджета
+        new_pw = st.text_input(
+            "Новий пароль",
+            value=st.session_state.get("own_pw_gen", ""),
+            type="default")
+    with pc2:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        save_own = st.button("Зберегти", type="primary", key="save_own_pw",
+                             use_container_width=True)
 
     if save_own:
         if len(new_pw) < 8:
@@ -73,7 +76,7 @@ with st.expander("🔑 Мій пароль"):
             auth.set_password(user["username"], new_pw, force_change=False)
             auth.remember_password(user["username"], new_pw, user["username"])
             auth.log_action("password_change_own")
-            st.session_state.pop("own_pw_value", None)
+            st.session_state.pop("own_pw_gen", None)
             st.success(f"Пароль змінено: **{new_pw}**")
 
 # --------------------------------------------------- створення нового ----
@@ -387,4 +390,4 @@ with st.expander("Журнал входів"):
                 unsafe_allow_html=True)
 
 st.caption("Паролі зберігаються хешем — відновити їх неможливо, "
-           "лише згенерувати новий") 
+           "лише згенерувати новий")
