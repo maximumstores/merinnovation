@@ -96,6 +96,8 @@ if lang_supported:
                                     format_func=lambda x: names.get(x, x),
                                     key="ai_lang")
 
+_queued = None
+_queued_err = None
 with fc4:
     st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
     if st.button(t("ai_refresh"), key="ai_refresh_btn",
@@ -107,9 +109,15 @@ with fc4:
                     INSERT INTO merinnovation.job_queue (script, requested_by)
                     VALUES ('10_ai_analyst.py', 'dashboard')
                 """)
-            st.success(t("ai_refresh_queued"))
+            _queued = t("ai_refresh_queued")
         except Exception as e:
-            st.error(f"{t('ai_refresh_failed')}: {e}")
+            _queued_err = str(e)
+
+# повідомлення поза колонками — на всю ширину, інакше розтягує колонку
+if _queued:
+    st.success(_queued, icon="⏳")
+if _queued_err:
+    st.error(f"{t('ai_refresh_failed')}: {_queued_err}")
 
 try:
     lj = q("""
