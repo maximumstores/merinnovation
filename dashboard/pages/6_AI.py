@@ -453,4 +453,4 @@ with st.expander(t("ai_history")):
                 f'line-height:1.5;">{icon} {esc(d.get("headline"))}</span>'
                 f'</div>', unsafe_allow_html=True)
 
-st.caption(t("ai_cache_note"))
+st.caption(t("ai_cache_note")) 
