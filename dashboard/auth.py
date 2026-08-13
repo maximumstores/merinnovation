@@ -120,6 +120,21 @@ def init_auth(conn=None):
             CREATE INDEX IF NOT EXISTS idx_activity_at
             ON merinnovation.activity_log (at DESC);
         """)
+        # Блокнот адміна: паролі, які ЗАДАВ адмін, щоб не тримати їх
+        # у голові й не скидати заново після кожного закритого вікна.
+        #
+        # ВАЖЛИВО: це не відновлення хешів — так не буває. Сюди пише лише
+        # той пароль, який адмін щойно призначив. Щойно людина змінить його
+        # сама, запис стає нечинним, і це видно в картці.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS merinnovation.password_notes (
+                username TEXT PRIMARY KEY,
+                password TEXT,
+                set_by TEXT,
+                set_at TIMESTAMPTZ DEFAULT now(),
+                changed_by_user BOOLEAN DEFAULT FALSE
+            );
+        """)
 
         # Першого адміна створює create_admin.py — разовий скрипт,
         # який пише напряму в базу. Тут нічого не бутстрапимо: тримати
@@ -229,6 +244,56 @@ def create_user(username, password, full_name, role, created_by,
         """, (username.strip().lower(), hash_password(password),
               full_name, role, created_by, must_change))
     conn.commit()
+
+
+def remember_password(username: str, password: str, set_by: str):
+    """Зберігає пароль, який задав адмін."""
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO merinnovation.password_notes
+                    (username, password, set_by, changed_by_user)
+                VALUES (%s, %s, %s, FALSE)
+                ON CONFLICT (username) DO UPDATE SET
+                    password = EXCLUDED.password,
+                    set_by = EXCLUDED.set_by,
+                    set_at = now(),
+                    changed_by_user = FALSE
+            """, (username.strip().lower(), password, set_by))
+        conn.commit()
+    except Exception:
+        pass
+
+
+def mark_password_changed(username: str):
+    """Людина змінила пароль сама — запис у блокноті більше не чинний."""
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE merinnovation.password_notes
+                SET changed_by_user = TRUE
+                WHERE username = %s
+            """, (username.strip().lower(),))
+        conn.commit()
+    except Exception:
+        pass
+
+
+def get_password_note(username: str):
+    """Повертає (пароль, дата, чи змінив користувач сам) або None."""
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT password, set_at, changed_by_user
+                FROM merinnovation.password_notes WHERE username = %s
+            """, (username.strip().lower(),))
+            row = cur.fetchone()
+        return row if row else None
+    except Exception:
+        return None
 
 
 def set_password(username: str, password: str, force_change: bool = True):
@@ -502,6 +567,7 @@ def _change_password_form():
             else:
                 set_password(st.session_state["auth_user"], p1,
                              force_change=False)
+                mark_password_changed(st.session_state["auth_user"])
                 st.session_state["auth_must_change"] = False
                 st.success(t("pw_changed"))
                 st.rerun()
