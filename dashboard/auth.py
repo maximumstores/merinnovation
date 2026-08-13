@@ -105,31 +105,11 @@ def init_auth(conn=None):
             ON merinnovation.login_log (at DESC);
         """)
 
-        # Перший адмін — з .env або secrets. Створюється один раз;
-        # далі користувачами керує сам адмін через кабінет.
-        cur.execute("SELECT COUNT(*) FROM merinnovation.users WHERE role='admin'")
-        if cur.fetchone()[0] == 0:
-            admin_user = _get_secret("ADMIN_USER")
-            admin_pass = _get_secret("ADMIN_PASSWORD")
-            if admin_user and admin_pass:
-                cur.execute("""
-                    INSERT INTO merinnovation.users
-                        (username, password_hash, full_name, role,
-                         must_change_password, created_by)
-                    VALUES (%s, %s, %s, 'admin', FALSE, 'bootstrap')
-                    ON CONFLICT (username) DO NOTHING
-                """, (admin_user.strip().lower(), hash_password(admin_pass),
-                      "Адміністратор"))
+        # Першого адміна створює create_admin.py — разовий скрипт,
+        # який пише напряму в базу. Тут нічого не бутстрапимо: тримати
+        # робочий пароль у конфігу застосунку означає мати другий
+        # екземпляр ключа, який ніхто не ротує.
     conn.commit()
-
-
-def _get_secret(key: str):
-    try:
-        if key in st.secrets:
-            return st.secrets[key]
-    except Exception:
-        pass
-    return os.getenv(key)
 
 
 def get_user(username: str):
@@ -264,8 +244,12 @@ def _login_css():
     """На екрані входу Streamlit малює власну навігацію зі СИРИМИ іменами
     файлів (app, Stock, Users...) — наш сайдбар з'являється лише після
     авторизації. Ховаємо цей службовий вигляд, щоб чужа людина не бачила
-    структуру застосунку до входу."""
-    from db import cur_theme
+    структуру застосунку до входу.
+
+    Тут же дублюємо стилі кнопок і полів: inject_css() працює лише після
+    авторизації, а до входу без них світла тема дає темні кнопки
+    з темним текстом."""
+    from db import ACCENT, cur_theme
     th = cur_theme()
     st.markdown(f"""
 <style>
@@ -273,20 +257,42 @@ def _login_css():
 [data-testid="stToolbar"] {{ display: none !important; }}
 [data-testid="stDecoration"] {{ display: none !important; }}
 [data-testid="stStatusWidget"] {{ display: none !important; }}
-#MainMenu {{ visibility: hidden !important; }}
 [data-testid="stAppDeployButton"] {{ display: none !important; }}
 .stAppDeployButton, .stDeployButton {{ display: none !important; }}
 [data-testid="stHeaderActionElements"] {{ display: none !important; }}
+#MainMenu {{ visibility: hidden !important; }}
 header[data-testid="stHeader"] {{ background: transparent !important; }}
 footer {{ visibility: hidden !important; }}
+
 .stApp {{ background: {th["bg"]} !important; }}
 [data-testid="stSidebar"] {{ background: {th["sidebar"]} !important; }}
 .stApp, .stApp p, .stApp span, .stApp label {{ color: {th["text"]} !important; }}
+
+/* Поля вводу */
 [data-testid="stTextInput"] input {{
     background-color: {th["card"]} !important;
     color: {th["text"]} !important;
     border-color: {th["border"]} !important;
 }}
+
+/* Неактивні кнопки: без цього на світлій темі вони темні з темним
+   текстом — написи просто не читаються */
+button[kind="secondary"], button[kind="secondary"] * {{
+    background-color: {th["card"]} !important;
+    color: {th["text"]} !important;
+    border-color: {th["border"]} !important;
+}}
+button[kind="secondary"]:hover {{ border-color: {ACCENT} !important; }}
+
+/* Кнопка "показати пароль" — той самий фон, що й поле */
+[data-testid="stTextInput"] button,
+[data-testid="stTextInput"] button * {{
+    background-color: {th["card"]} !important;
+    color: {th["muted"]} !important;
+    border-color: {th["border"]} !important;
+}}
+[data-testid="stTextInput"] button:hover * {{ color: {th["text"]} !important; }}
+[data-testid="stTextInput"] svg {{ fill: {th["muted"]} !important; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -340,6 +346,30 @@ def _login_sidebar():
                                else "secondary")):
                 st.session_state["theme"] = "light"
                 st.rerun()
+
+
+def _has_any_user() -> bool:
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM merinnovation.users")
+            return cur.fetchone()[0] > 0
+    except Exception:
+        return True
+
+
+def _no_users_hint():
+    """Без цього порожня база дає екран входу, у який неможливо увійти —
+    і незрозуміло чому."""
+    _login_css()
+    st.markdown("### Кабінет ще не налаштовано")
+    st.info(
+        "У базі немає жодного користувача. Створи адміністратора "
+        "на сервері:\n\n"
+        "```\npython create_admin.py\n```\n\n"
+        "Скрипт покаже логін і пароль. Далі користувачами керуєш "
+        "у кабінеті на сторінці «Користувачі»."
+    )
 
 
 def _login_form():
@@ -435,6 +465,9 @@ def require_auth(page: str = None):
         st.stop()
 
     if not _session_valid():
+        if not _has_any_user():
+            _no_users_hint()
+            st.stop()
         _login_form()
         st.stop()
 
