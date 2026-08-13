@@ -10,6 +10,8 @@ import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import auth
+
 from db import (ACCENT, ACCENT2, AMAZON_DOMAINS, cell_link, cell_photo,
                 download_csv_button, inject_css, lang_selector, metric_card,
                 mp_label, plotly_layout, q, render_html_table, sort_controls,
@@ -17,8 +19,11 @@ from db import (ACCENT, ACCENT2, AMAZON_DOMAINS, cell_link, cell_photo,
 
 st.set_page_config(layout="wide", page_title="Merinnovation · Forecast",
                    page_icon="🐑")
+
+auth.require_auth("4_Forecast")
 lang_selector()
 inject_css()
+auth.sidebar_user_block()
 
 st.markdown(f"## {t('forecast_title')}")
 
