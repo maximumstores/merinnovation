@@ -13,14 +13,19 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import auth
+
 from db import (ACCENT, ACCENT2, AMAZON_DOMAINS, cell_link, cell_photo,
                 cur_theme, download_csv_button, inject_css, lang_selector,
                 metric_card, mp_label, plotly_layout, q, render_html_table,
                 sort_controls, t)
 
 st.set_page_config(layout="wide", page_title="Merinnovation", page_icon="🐑")
+
+auth.require_auth("app")
 lang_selector()
 inject_css()
+auth.sidebar_user_block()
 
 st.markdown(f"## {t('overview_title')}")
 
