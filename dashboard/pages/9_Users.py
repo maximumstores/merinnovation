@@ -71,6 +71,7 @@ with st.expander("🔑 Мій пароль"):
             st.error("Пароль має бути не коротшим за 8 символів")
         else:
             auth.set_password(user["username"], new_pw, force_change=False)
+            auth.remember_password(user["username"], new_pw, user["username"])
             auth.log_action("password_change_own")
             st.session_state.pop("own_pw_value", None)
             st.success(f"Пароль змінено: **{new_pw}**")
@@ -111,6 +112,8 @@ with st.expander("➕ Додати користувача", expanded=len(users) 
                 auth.create_user(login, gen_pass, new_name or login,
                                  new_role, user["username"],
                                  must_change=not keep_pw)
+                if keep_pw:
+                    auth.remember_password(login, gen_pass, user["username"])
                 auth.log_action("user_create", login)
                 st.success("Користувача створено")
                 tail = ("" if keep_pw else
@@ -139,6 +142,7 @@ else:
         created = (pd.to_datetime(u["created_at"]).strftime("%d.%m.%Y")
                    if pd.notna(u["created_at"]) else "—")
         must_change = bool(u["must_change_password"])
+        note = auth.get_password_note(u["username"])
 
         title = (f"{u['full_name'] or u['username']}"
                  f"{' (це ви)' if is_self else ''}  ·  {role_label}"
@@ -156,8 +160,35 @@ else:
                 f'Створено: {created} ({u["created_by"] or "—"})<br>'
                 f'Останній вхід: {last} · всього входів: '
                 f'{int(u["login_count"] or 0)}<br>'
-                f'Пароль: {"тимчасовий, змінить при вході" if must_change else "робочий"}'
                 f'</div></div>', unsafe_allow_html=True)
+
+            # Пароль, який задав адмін. Показуємо лише поки людина не
+            # змінила його сама — після цього запис нечинний, і чесніше
+            # сказати про це, ніж показувати застарілий рядок.
+            if note and not note[2]:
+                pw_val, pw_at, _ = note
+                st.markdown(
+                    f'<div style="background:{th["card"]};'
+                    f'border:1px solid {ACCENT}55;border-radius:10px;'
+                    f'padding:12px 16px;margin-bottom:12px;">'
+                    f'<span style="color:{th["muted"]};font-size:12px;'
+                    f'letter-spacing:.08em;text-transform:uppercase;">'
+                    f'Поточний пароль</span><br>'
+                    f'<code style="color:{ACCENT};font-size:17px;'
+                    f'font-weight:700;letter-spacing:.5px;">{pw_val}</code>'
+                    f'<span style="color:{th["muted"]};font-size:12px;'
+                    f'margin-left:12px;">задано '
+                    f'{pd.to_datetime(pw_at):%d.%m %H:%M}'
+                    f'{" · змінить при вході" if must_change else ""}</span>'
+                    f'</div>', unsafe_allow_html=True)
+            elif note and note[2]:
+                st.caption("Користувач змінив пароль сам — поточний "
+                           "невідомий. Задай новий, якщо потрібен доступ.")
+            elif is_self:
+                st.caption("Свій пароль — у блоці «Мій пароль» вище")
+            else:
+                st.caption("Пароль задано до появи блокнота. "
+                           "Задай новий, щоб він тут відображався.")
 
             bc1, bc2, bc3, bc4 = st.columns(4)
 
@@ -252,6 +283,12 @@ else:
                     else:
                         auth.set_password(u["username"], manual_pw,
                                           force_change=force)
+                        if not force:
+                            # запам'ятовуємо лише якщо пароль робочий:
+                            # якщо людина зараз же його змінить, запис
+                            # був би оманою
+                            auth.remember_password(u["username"], manual_pw,
+                                                   user["username"])
                         auth.log_action("password_set", u["username"])
                         st.session_state[f"shown_pw_{u['username']}"] = manual_pw
                         st.session_state.pop(f"setpw_{u['username']}", None)
