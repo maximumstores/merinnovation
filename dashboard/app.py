@@ -1,369 +1,576 @@
 # -*- coding: utf-8 -*-
-"""Merinnovation Dashboard — Огляд / Overview."""
+"""Авторизація кабінету: логін, ролі, керування користувачами.
 
+Ролі:
+    admin  — бачить усе, керує користувачами
+    user   — робочі сторінки, без Алертів і технічного
+
+Паролі зберігаються ХЕШЕМ (bcrypt), не текстом. Навіть маючи доступ до
+бази, пароль відновити не можна — це важливо, бо в тій самій базі лежать
+дані продажів, і компрометація одного не має відкривати інше.
+"""
+
+import os
+import secrets
+import string
 from datetime import datetime, timedelta, timezone
 
-try:
-    from zoneinfo import ZoneInfo
-    PACIFIC = ZoneInfo("America/Los_Angeles")
-except Exception:
-    PACIFIC = timezone(timedelta(hours=-7))  # fallback, без DST
-
 import pandas as pd
-import plotly.graph_objects as go
+import psycopg2
 import streamlit as st
 
-import auth
+try:
+    import bcrypt
+    HAS_BCRYPT = True
+except ImportError:
+    HAS_BCRYPT = False
+    import hashlib
 
-from db import (ACCENT, ACCENT2, AMAZON_DOMAINS, cell_link, cell_photo,
-                cur_theme, download_csv_button, inject_css, lang_selector,
-                metric_card, mp_label, plotly_layout, q, render_html_table,
-                sort_controls, t)
+# Сторінки, доступні лише адміну
+ADMIN_ONLY_PAGES = {"7_Alerts"}
 
-st.set_page_config(layout="wide", page_title="Merinnovation", page_icon="🐑")
-
-auth.require_auth("app")
-lang_selector()
-inject_css()
-auth.sidebar_user_block()
-
-st.markdown(f"## {t('overview_title')}")
-
-mps = q("SELECT DISTINCT marketplace_id FROM merinnovation.orders ORDER BY 1")
-mp_options = ["All"] + mps["marketplace_id"].dropna().tolist()
-
-fc1, fc2, _ = st.columns([2, 2, 6])
-with fc1:
-    mp_sel = st.selectbox(t("marketplace"), mp_options, format_func=mp_label, key="mp")
-with fc2:
-    period = st.selectbox(t("period"), [7, 14, 30], index=1,
-                          format_func=lambda d: f"{d} {t('days')}", key="period")
-
-is_today_mode = False  # "Сьогодні" прибрано з періоду — плутало більше, ніж давало користі
-
-now_utc = datetime.now(timezone.utc)
-date_from = (now_utc - timedelta(days=period)).strftime("%Y-%m-%d")
-prev_from = (now_utc - timedelta(days=period * 2)).strftime("%Y-%m-%d")
-
-mp_where = "" if mp_sel == "All" else "AND marketplace_id = %s"
-mp_params: tuple = () if mp_sel == "All" else (mp_sel,)
-
-orders_2p = q(f"""
-    SELECT amazon_order_id, purchase_date, order_status, marketplace_id,
-           order_total_amount, order_total_currency
-    FROM merinnovation.orders
-    WHERE purchase_date >= %s::date
-      AND order_status <> 'Canceled'
-      {mp_where}
-""", (prev_from, *mp_params))
-
-if orders_2p.empty:
-    st.info(t("no_orders"))
-    st.stop()
-
-orders_2p["purchase_date"] = pd.to_datetime(orders_2p["purchase_date"], utc=True)
-orders_2p["day"] = orders_2p["purchase_date"].dt.date
-orders_2p["order_total_amount"] = pd.to_numeric(
-    orders_2p["order_total_amount"], errors="coerce").fillna(0)
-
-cutoff = (now_utc - timedelta(days=period)).date()
-orders = orders_2p[orders_2p["day"] >= cutoff].copy()
-orders_prev = orders_2p[orders_2p["day"] < cutoff]
-
-if orders.empty:
-    st.info(t("no_orders"))
-    st.stop()
-
-n_orders = len(orders)
-n_prev = len(orders_prev)
-
-earliest_date = orders_2p["day"].min()
-enough_history = earliest_date <= (now_utc - timedelta(days=period * 2 - 1)).date()
-
-rev_by_cur = (orders.groupby("order_total_currency")["order_total_amount"]
-              .sum().sort_values(ascending=False))
-rev_by_cur = rev_by_cur[rev_by_cur.index.notna()]
-if len(rev_by_cur):
-    main_cur = rev_by_cur.index[0]
-    main_rev = rev_by_cur.iloc[0]
-    other = " · ".join(f"{v:,.0f} {c}" for c, v in rev_by_cur.iloc[1:].items())
-else:
-    main_cur, main_rev, other = "", 0.0, ""
-
-prev_rev = orders_prev.loc[
-    orders_prev["order_total_currency"] == main_cur, "order_total_amount"].sum()
-
-main_cur_orders = orders[orders["order_total_currency"] == main_cur]
-avg_check = (main_cur_orders["order_total_amount"].mean()
-             if len(main_cur_orders) else 0)
-
-# ------------------------------------------------------ точна виручка ----
-# Orders API не завжди дає суму для Pending-замовлень (Amazon просто не
-# віддає OrderTotal, поки замовлення не підтверджене). Sales & Traffic
-# Report дає точну "Ordered Product Sales" — таку саму цифру, як у
-# Amazon Seller Central Sales Dashboard. Якщо дані вже завантажені —
-# використовуємо їх замість оцінки по Orders API.
-st_mp_where = "" if mp_sel == "All" else "AND marketplace_id = %s"
-st_mp_params = () if mp_sel == "All" else (mp_sel,)
-
-st_daily = q(f"""
-    SELECT report_date, ordered_product_sales, ordered_product_sales_currency,
-           units_ordered, sessions, page_views
-    FROM merinnovation.sales_traffic_daily
-    WHERE report_date >= %s AND report_date <= %s
-      {st_mp_where}
-""", (date_from, now_utc.strftime("%Y-%m-%d"), *st_mp_params))
-
-use_accurate_revenue = not st_daily.empty
-sessions_total = 0
-conversion_pct = None
-
-if use_accurate_revenue:
-    st_rev_by_cur = (st_daily.groupby("ordered_product_sales_currency")
-                    ["ordered_product_sales"].sum().sort_values(ascending=False))
-    st_rev_by_cur = st_rev_by_cur[st_rev_by_cur.index.notna()]
-    if len(st_rev_by_cur):
-        main_cur = st_rev_by_cur.index[0]
-        main_rev = st_rev_by_cur.iloc[0]
-        other = " · ".join(f"{v:,.0f} {c}" for c, v in st_rev_by_cur.iloc[1:].items())
-    sessions_total = int(st_daily["sessions"].sum())
-    units_from_traffic = int(st_daily["units_ordered"].sum())
-    if sessions_total > 0:
-        conversion_pct = units_from_traffic / sessions_total * 100
-
-orders_today = int(
-    (orders["purchase_date"].dt.tz_convert(PACIFIC).dt.date
-     == datetime.now(PACIFIC).date()).sum()
-)
-pending_count = int((orders["order_status"] == "Pending").sum())
+SESSION_HOURS = 12
 
 
-def pct_delta(cur, prev):
-    if is_today_mode or not enough_history or not prev or prev < 5:
-        return None, True
-    change = (cur - prev) / prev * 100
-    if abs(change) > 500:
-        return None, True
-    return f"{abs(change):.0f}%", change >= 0
+# ------------------------------------------------------------- паролі ----
+
+def hash_password(password: str) -> str:
+    if HAS_BCRYPT:
+        return bcrypt.hashpw(password.encode("utf-8"),
+                             bcrypt.gensalt()).decode("utf-8")
+    # запасний варіант, якщо bcrypt не встановлено: salted sha256
+    salt = secrets.token_hex(16)
+    h = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+    return f"sha256${salt}${h}"
 
 
-d_orders, up_orders = pct_delta(n_orders, n_prev)
-d_rev, up_rev = pct_delta(main_rev, prev_rev)
+def verify_password(password: str, stored: str) -> bool:
+    if not stored:
+        return False
+    if stored.startswith("sha256$"):
+        _, salt, h = stored.split("$", 2)
+        return hashlib.sha256((salt + password).encode("utf-8")).hexdigest() == h
+    if HAS_BCRYPT:
+        try:
+            return bcrypt.checkpw(password.encode("utf-8"),
+                                  stored.encode("utf-8"))
+        except Exception:
+            return False
+    return False
 
-period_label = t("today_option") if is_today_mode else f"{period} {t('days')}"
 
-# "очікує підтвердження" показуємо тільки якщо НЕМАЄ точних даних
-# з Sales & Traffic Report — якщо вони є, довіряємо їм навіть за Pending
-all_pending_period = (pending_count == n_orders and n_orders > 0
-                      and not use_accurate_revenue)
+def generate_password(length: int = 12) -> str:
+    """Читабельний пароль без символів, які плутають: 0/O, 1/l/I."""
+    alphabet = "".join(c for c in (string.ascii_letters + string.digits)
+                       if c not in "0O1lI")
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
-# Коли точних даних Amazon ще немає (звіт з'явиться завтра), рахуємо
-# наближену оцінку по цінах ПОЗИЦІЙ замовлення (item_price) — Amazon
-# зазвичай віддає її навіть для Pending-замовлень, на відміну від
-# сумарного OrderTotal на рівні замовлення, який часто відсутній.
-estimated_rev = None
-estimated_cur = None
-if all_pending_period:
-    order_ids_today = tuple(orders["amazon_order_id"].tolist())
-    if order_ids_today:
-        est = q("""
-            SELECT item_price_currency, SUM(item_price_amount * quantity_ordered) AS est_sum
-            FROM merinnovation.order_items
-            WHERE amazon_order_id IN %s
-            GROUP BY item_price_currency
-            ORDER BY est_sum DESC
-        """, (order_ids_today,))
-        est = est[est["item_price_currency"].notna()]
-        if not est.empty:
-            estimated_cur = est.iloc[0]["item_price_currency"]
-            estimated_rev = est.iloc[0]["est_sum"]
 
-rev_display = (t("pending_note") if all_pending_period
-              else f"{main_rev:,.0f} {main_cur}")
+# ---------------------------------------------------------------- БД ----
 
-rev_sub = None
-if all_pending_period:
-    if estimated_rev is not None:
-        rev_sub = f"{t('estimate_label')}: ~{estimated_rev:,.0f} {estimated_cur}"
-    elif is_today_mode:
-        rev_sub = t("today_pending_hint")
-elif use_accurate_revenue and conversion_pct is not None:
-    rev_sub = f"{t('conversion_label')}: {conversion_pct:.1f}% · {sessions_total:,} {t('sessions_label')}"
-    if other:
-        rev_sub = f"{other} · {rev_sub}"
-elif other:
-    rev_sub = other
+def _conn():
+    from db import get_conn
+    return get_conn()
 
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    metric_card(f"{t('orders_n')} · {period_label}", f"{n_orders:,}",
-                delta=d_orders, delta_up=up_orders)
-with c2:
-    metric_card(f"{t('revenue')} · {period_label}",
-                rev_display,
-                delta=None if all_pending_period else d_rev,
-                delta_up=up_rev,
-                sub=rev_sub)
-with c3:
-    metric_card(t("avg_check"), f"{avg_check:,.2f} {main_cur}"
-                if not all_pending_period else "—")
-with c4:
-    metric_card(t("orders_today"), f"{orders_today}",
-                sub=f"Pending: {pending_count} · PDT")
 
-st.markdown("")
+def init_auth(conn=None):
+    """Таблиця користувачів + перший адмін із .env."""
+    conn = conn or _conn()
+    with conn.cursor() as cur:
+        cur.execute("CREATE SCHEMA IF NOT EXISTS merinnovation;")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS merinnovation.users (
+                username TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                full_name TEXT,
+                role TEXT NOT NULL DEFAULT 'user',
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                must_change_password BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                created_by TEXT,
+                last_login TIMESTAMPTZ,
+                login_count INT DEFAULT 0
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS merinnovation.login_log (
+                id BIGSERIAL PRIMARY KEY,
+                username TEXT,
+                success BOOLEAN,
+                at TIMESTAMPTZ DEFAULT now()
+            );
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_login_log_at
+            ON merinnovation.login_log (at DESC);
+        """)
+        # Журнал дій: видно, хто які сторінки відкривав і що змінював.
+        # Це не стеження, а відповідь на питання "хто це зробив" —
+        # коли працює кілька людей, без журналу з'ясувати неможливо.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS merinnovation.activity_log (
+                id BIGSERIAL PRIMARY KEY,
+                username TEXT,
+                action TEXT,
+                target TEXT,
+                at TIMESTAMPTZ DEFAULT now()
+            );
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_activity_at
+            ON merinnovation.activity_log (at DESC);
+        """)
 
-daily = (orders.groupby("day")
-         .agg(orders=("amazon_order_id", "count")).reset_index())
-daily_rev = (main_cur_orders.groupby("day")["order_total_amount"]
-             .sum().reset_index(name="revenue"))
-daily = daily.merge(daily_rev, on="day", how="left").fillna(0)
+        # Першого адміна створює create_admin.py — разовий скрипт,
+        # який пише напряму в базу. Тут нічого не бутстрапимо: тримати
+        # робочий пароль у конфігу застосунку означає мати другий
+        # екземпляр ключа, який ніхто не ротує.
+    conn.commit()
 
-chart_font_color = cur_theme()["chart_font"]
 
-fig = go.Figure()
-fig.add_bar(x=daily["day"], y=daily["orders"], name=t("orders_series"),
-            marker_color=ACCENT, opacity=0.85)
-fig.add_scatter(x=daily["day"], y=daily["revenue"],
-                name=f"{t('revenue_series')}, {main_cur}",
-                yaxis="y2", mode="lines+markers",
-                line=dict(color=ACCENT2, width=2))
-daily["day_label"] = daily["day"].astype(str)
-fig.data[0].x = daily["day_label"]
-fig.data[1].x = daily["day_label"]
+def log_action(action: str, target: str = None):
+    """Записує дію поточного користувача. Викликається там, де щось
+    змінюється або відкривається важлива сторінка."""
+    username = st.session_state.get("auth_user")
+    if not username:
+        return
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO merinnovation.activity_log (username, action, target)
+                VALUES (%s, %s, %s)
+            """, (username, action, target))
+        conn.commit()
+    except Exception:
+        pass
 
-layout_kwargs = plotly_layout(title=t("chart_daily"))
-layout_kwargs["xaxis"] = dict(type="category", showgrid=False, color=chart_font_color,
-                              tickfont=dict(color=chart_font_color))
-layout_kwargs["yaxis2"] = dict(overlaying="y", side="right", showgrid=False,
-                               color=chart_font_color,
-                               tickfont=dict(color=chart_font_color))
-fig.update_layout(**layout_kwargs)
-st.plotly_chart(fig, use_container_width=True)
 
-top_sku = q(f"""
-    SELECT oi.seller_sku, oi.asin, SUM(oi.quantity_ordered) AS qty
-    FROM merinnovation.order_items oi
-    JOIN merinnovation.orders o USING (amazon_order_id)
-    WHERE o.purchase_date >= %s::date
-      AND o.order_status <> 'Canceled'
-      {mp_where.replace('marketplace_id', 'o.marketplace_id')}
-    GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 10
-""", (date_from, *mp_params))
+def get_user(username: str):
+    conn = _conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT username, password_hash, full_name, role, is_active,
+                   must_change_password
+            FROM merinnovation.users WHERE username = %s
+        """, (username.strip().lower(),))
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {"username": row[0], "password_hash": row[1], "full_name": row[2],
+            "role": row[3], "is_active": row[4], "must_change": row[5]}
 
-if not top_sku.empty:
-    top_sku_sorted = top_sku.sort_values("qty")
-    f2 = go.Figure(go.Bar(
-        x=top_sku_sorted["qty"], y=top_sku_sorted["seller_sku"], orientation="h",
-        marker_color=ACCENT, text=top_sku_sorted["qty"], textposition="outside",
-    ))
-    f2.update_layout(**plotly_layout(title=t("top10_sku")))
-    st.plotly_chart(f2, use_container_width=True)
 
-    asins = tuple(top_sku["asin"].dropna().unique())
-    if asins:
-        photos = q("""
-            SELECT DISTINCT ON (asin) asin, marketplace_id, image_url
-            FROM merinnovation.catalog_images
-            WHERE asin IN %s
-        """, (asins,))
-    else:
-        photos = pd.DataFrame(columns=["asin", "marketplace_id", "image_url"])
+def log_attempt(username: str, success: bool):
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO merinnovation.login_log (username, success)
+                VALUES (%s, %s)
+            """, (username, success))
+        conn.commit()
+    except Exception:
+        pass
 
-    top_tbl = top_sku.merge(photos, on="asin", how="left")
-    top_tbl["asin_link"] = (
-        "https://" + top_tbl["marketplace_id"].map(AMAZON_DOMAINS).fillna("amazon.com")
-        + "/dp/" + top_tbl["asin"].fillna("")
+
+def mark_login(username: str):
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE merinnovation.users
+                SET last_login = now(), login_count = COALESCE(login_count,0)+1
+                WHERE username = %s
+            """, (username,))
+        conn.commit()
+    except Exception:
+        pass
+
+
+def too_many_attempts(username: str) -> bool:
+    """Захист від перебору: 5 невдалих спроб за 15 хвилин."""
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) FROM merinnovation.login_log
+                WHERE username = %s AND success = FALSE
+                  AND at > now() - INTERVAL '15 minutes'
+            """, (username,))
+            return cur.fetchone()[0] >= 5
+    except Exception:
+        return False
+
+
+# ------------------------------------------------------ користувачі ----
+
+def list_users() -> pd.DataFrame:
+    conn = _conn()
+    return pd.read_sql("""
+        SELECT username, full_name, role, is_active, must_change_password,
+               created_at, created_by, last_login, login_count
+        FROM merinnovation.users ORDER BY role, username
+    """, conn)
+
+
+def create_user(username, password, full_name, role, created_by):
+    conn = _conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO merinnovation.users
+                (username, password_hash, full_name, role, created_by)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (username.strip().lower(), hash_password(password),
+              full_name, role, created_by))
+    conn.commit()
+
+
+def set_password(username: str, password: str, force_change: bool = True):
+    conn = _conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE merinnovation.users
+            SET password_hash = %s, must_change_password = %s
+            WHERE username = %s
+        """, (hash_password(password), force_change, username.strip().lower()))
+    conn.commit()
+
+
+def change_own_password(username: str, old: str, new: str) -> tuple:
+    """Зміна власного пароля — ЗІ СТАРИМ. Без цієї перевірки будь-хто,
+    хто отримав доступ до відкритої сесії, міняє пароль і забирає акаунт."""
+    user = get_user(username)
+    if not user:
+        return False, "user_missing"
+    if not verify_password(old, user["password_hash"]):
+        return False, "old_wrong"
+    if len(new) < 8:
+        return False, "too_short"
+    set_password(username, new, force_change=False)
+    return True, "ok"
+
+
+def set_active(username: str, active: bool):
+    conn = _conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE merinnovation.users SET is_active = %s WHERE username = %s
+        """, (active, username.strip().lower()))
+    conn.commit()
+
+
+def set_role(username: str, role: str):
+    conn = _conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE merinnovation.users SET role = %s WHERE username = %s
+        """, (role, username.strip().lower()))
+    conn.commit()
+
+
+def delete_user(username: str):
+    conn = _conn()
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM merinnovation.users WHERE username = %s",
+                    (username.strip().lower(),))
+    conn.commit()
+
+
+# --------------------------------------------------------------- UI ----
+
+def _session_valid() -> bool:
+    if not st.session_state.get("auth_user"):
+        return False
+    ts = st.session_state.get("auth_at")
+    if not ts:
+        return False
+    return (datetime.now(timezone.utc) - ts) < timedelta(hours=SESSION_HOURS)
+
+
+def _login_css():
+    """На екрані входу Streamlit малює власну навігацію зі СИРИМИ іменами
+    файлів (app, Stock, Users...) — наш сайдбар з'являється лише після
+    авторизації. Ховаємо цей службовий вигляд, щоб чужа людина не бачила
+    структуру застосунку до входу.
+
+    Тут же дублюємо стилі кнопок і полів: inject_css() працює лише після
+    авторизації, а до входу без них світла тема дає темні кнопки
+    з темним текстом."""
+    from db import ACCENT, cur_theme
+    th = cur_theme()
+    st.markdown(f"""
+<style>
+[data-testid="stSidebarNav"] {{ display: none !important; }}
+[data-testid="stToolbar"] {{ display: none !important; }}
+[data-testid="stDecoration"] {{ display: none !important; }}
+[data-testid="stStatusWidget"] {{ display: none !important; }}
+[data-testid="stAppDeployButton"] {{ display: none !important; }}
+.stAppDeployButton, .stDeployButton {{ display: none !important; }}
+[data-testid="stHeaderActionElements"] {{ display: none !important; }}
+#MainMenu {{ visibility: hidden !important; }}
+header[data-testid="stHeader"] {{ background: transparent !important; }}
+footer {{ visibility: hidden !important; }}
+
+.stApp {{ background: {th["bg"]} !important; }}
+[data-testid="stSidebar"] {{ background: {th["sidebar"]} !important; }}
+.stApp, .stApp p, .stApp span, .stApp label {{ color: {th["text"]} !important; }}
+
+/* Поля вводу */
+[data-testid="stTextInput"] input {{
+    background-color: {th["card"]} !important;
+    color: {th["text"]} !important;
+    border-color: {th["border"]} !important;
+}}
+
+/* Неактивні кнопки: без цього на світлій темі вони темні з темним
+   текстом — написи просто не читаються */
+button[kind="secondary"], button[kind="secondary"] * {{
+    background-color: {th["card"]} !important;
+    color: {th["text"]} !important;
+    border-color: {th["border"]} !important;
+}}
+button[kind="secondary"]:hover {{ border-color: {ACCENT} !important; }}
+
+/* Кнопка "показати пароль" — той самий фон, що й поле */
+[data-testid="stTextInput"] button,
+[data-testid="stTextInput"] button * {{
+    background-color: {th["card"]} !important;
+    color: {th["muted"]} !important;
+    border-color: {th["border"]} !important;
+}}
+[data-testid="stTextInput"] button:hover * {{ color: {th["text"]} !important; }}
+[data-testid="stTextInput"] svg {{ fill: {th["muted"]} !important; }}
+</style>
+""", unsafe_allow_html=True)
+
+
+def _login_sidebar():
+    """Логотип і вибір мови/теми — доступні ще до входу."""
+    from db import (LANGS, LANG_LABELS, _logo_b64, ACCENT)
+
+    if "lang" not in st.session_state:
+        st.session_state["lang"] = "uk"
+    if "theme" not in st.session_state:
+        st.session_state["theme"] = "dark"
+
+    with st.sidebar:
+        b64 = _logo_b64()
+        if b64:
+            from db import cur_theme
+            th = cur_theme()
+            st.markdown(
+                f'<div style="padding: 8px 0 20px 0; text-align:center;">'
+                f'<img src="data:image/png;base64,{b64}" '
+                f'style="max-width:170px;width:100%;'
+                f'filter:{th["logo_filter"]};" /></div>',
+                unsafe_allow_html=True)
+
+        cols = st.columns(3)
+        for i, code in enumerate(LANGS):
+            with cols[i]:
+                if st.button(LANG_LABELS[code], key=f"login_lang_{code}",
+                             type=("primary"
+                                   if st.session_state["lang"] == code
+                                   else "secondary"),
+                             use_container_width=True):
+                    st.session_state["lang"] = code
+                    st.rerun()
+
+        tc1, tc2 = st.columns(2)
+        with tc1:
+            if st.button("Dark", key="login_th_dark", use_container_width=True,
+                         icon=":material/dark_mode:",
+                         type=("primary"
+                               if st.session_state["theme"] == "dark"
+                               else "secondary")):
+                st.session_state["theme"] = "dark"
+                st.rerun()
+        with tc2:
+            if st.button("Light", key="login_th_light", use_container_width=True,
+                         icon=":material/light_mode:",
+                         type=("primary"
+                               if st.session_state["theme"] == "light"
+                               else "secondary")):
+                st.session_state["theme"] = "light"
+                st.rerun()
+
+
+def _has_any_user() -> bool:
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM merinnovation.users")
+            return cur.fetchone()[0] > 0
+    except Exception:
+        return True
+
+
+def _no_users_hint():
+    """Без цього порожня база дає екран входу, у який неможливо увійти —
+    і незрозуміло чому."""
+    _login_css()
+    st.markdown("### Кабінет ще не налаштовано")
+    st.info(
+        "У базі немає жодного користувача. Створи адміністратора "
+        "на сервері:\n\n"
+        "```\npython create_admin.py\n```\n\n"
+        "Скрипт покаже логін і пароль. Далі користувачами керуєш "
+        "у кабінеті на сторінці «Користувачі»."
     )
 
-    st.caption(t("sort_hint"))
-    sort_col, sort_asc = sort_controls(
-        {"SKU": "seller_sku", "ASIN": "asin", t("col_qty"): "qty"},
-        key="topsku", default_index=2, default_desc=True,
-    )
-    top_tbl = top_tbl.sort_values(sort_col, ascending=sort_asc)
 
-    rows = top_tbl.to_dict("records")
-    columns = [
-        ("", lambda r: cell_photo(r.get("image_url"))),
-        ("SKU", lambda r: r.get("seller_sku") or ""),
-        ("ASIN", lambda r: cell_link(r.get("asin_link"), r.get("asin") or "")),
-        (t("col_qty"), lambda r: str(int(r.get("qty", 0)))),
-    ]
-    render_html_table(rows, columns, height=280)
-    download_csv_button(
-        top_tbl[["seller_sku", "asin", "qty"]], "top_sku", key="topsku",
-    )
+def _login_form():
+    from db import ACCENT, cur_theme, t
+    _login_css()
+    _login_sidebar()
+    th = cur_theme()
 
-st.markdown("")
-st.markdown(f"**{t('last20')}**")
+    st.markdown(
+        f'<div style="max-width:420px;margin:8vh auto 0 auto;">'
+        f'<div style="color:{th["text"]};font-size:30px;font-weight:700;'
+        f'letter-spacing:-0.02em;margin-bottom:6px;">Merinnovation</div>'
+        f'<div style="color:{th["muted"]};font-size:14px;margin-bottom:24px;">'
+        f'{t("login_subtitle")}</div></div>', unsafe_allow_html=True)
 
-last20 = orders.sort_values("purchase_date", ascending=False).head(20).copy()
+    _, mid, _ = st.columns([1, 2, 1])
+    with mid:
+        with st.form("login_form"):
+            username = st.text_input(t("login_user"), key="li_user")
+            password = st.text_input(t("login_pass"), type="password",
+                                     key="li_pass")
+            submitted = st.form_submit_button(t("login_btn"), type="primary",
+                                              use_container_width=True)
 
-order_ids = tuple(last20["amazon_order_id"].tolist())
-if order_ids:
-    items_info = q("""
-        SELECT DISTINCT ON (oi.amazon_order_id)
-               oi.amazon_order_id, oi.asin, c.image_url
-        FROM merinnovation.order_items oi
-        LEFT JOIN merinnovation.orders o USING (amazon_order_id)
-        LEFT JOIN merinnovation.catalog_images c
-          ON c.asin = oi.asin AND c.marketplace_id = o.marketplace_id
-        WHERE oi.amazon_order_id IN %s
-        ORDER BY oi.amazon_order_id, oi.order_item_id
-    """, (order_ids,))
-    last20 = last20.merge(items_info, on="amazon_order_id", how="left")
-else:
-    last20["asin"] = None
-    last20["image_url"] = None
+        if submitted:
+            u = (username or "").strip().lower()
+            if not u or not password:
+                st.error(t("login_empty"))
+                return
 
-last20["asin_link"] = (
-    "https://" + last20["marketplace_id"].map(AMAZON_DOMAINS).fillna("amazon.com")
-    + "/dp/" + last20["asin"].fillna("")
-)
-last20["market_label"] = last20["marketplace_id"].map(mp_label)
-last20["date_label"] = last20["purchase_date"].dt.strftime("%d.%m %H:%M")
-last20["sum_label"] = last20.apply(
-    lambda r: "—" if pd.isna(r["order_total_amount"]) or r["order_total_amount"] == 0
-    else f"{r['order_total_amount']:,.2f} {r['order_total_currency'] or ''}",
-    axis=1,
-)
+            if too_many_attempts(u):
+                st.error(t("login_throttled"))
+                return
 
-order_search = st.text_input(t("search_orders"), "", key="order_search")
-if order_search.strip():
-    import re
-    tokens = [tok.lower() for tok in re.split(r"[,\s;]+", order_search.strip()) if tok]
-    mask = pd.Series(False, index=last20.index)
-    for tok in tokens:
-        mask |= (
-            last20["amazon_order_id"].str.lower().str.contains(tok, na=False)
-            | last20["asin"].str.lower().str.contains(tok, na=False)
-        )
-    last20 = last20[mask]
+            user = get_user(u)
+            if not user or not verify_password(password, user["password_hash"]):
+                log_attempt(u, False)
+                # навмисно не уточнюємо, що саме невірне — щоб не давати
+                # підказку про існування логіна
+                st.error(t("login_bad"))
+                return
 
-st.caption(t("sort_hint"))
-sort_col20, sort_asc20 = sort_controls(
-    {t("col_date"): "purchase_date", t("col_status"): "order_status",
-     t("col_market"): "market_label", t("col_sum"): "order_total_amount"},
-    key="last20", default_index=0, default_desc=True,
-)
-last20 = last20.sort_values(sort_col20, ascending=sort_asc20)
+            if not user["is_active"]:
+                log_attempt(u, False)
+                st.error(t("login_disabled"))
+                return
 
-rows20 = last20.to_dict("records")
-columns20 = [
-    ("", lambda r: cell_photo(r.get("image_url"))),
-    (t("col_order"), lambda r: r.get("amazon_order_id") or ""),
-    ("ASIN", lambda r: cell_link(r.get("asin_link"), r.get("asin") or "")),
-    (t("col_date"), lambda r: r.get("date_label") or ""),
-    (t("col_status"), lambda r: r.get("order_status") or ""),
-    (t("col_market"), lambda r: r.get("market_label") or ""),
-    (t("col_sum"), lambda r: r.get("sum_label") or ""),
-]
-render_html_table(rows20, columns20, height=380)
-download_csv_button(
-    last20[["amazon_order_id", "asin", "date_label", "order_status",
-           "market_label", "sum_label"]],
-    "last20_orders", key="last20",
-)
+            log_attempt(u, True)
+            mark_login(u)
+            st.session_state["auth_user"] = user["username"]
+            st.session_state["auth_role"] = user["role"]
+            st.session_state["auth_name"] = user["full_name"] or user["username"]
+            st.session_state["auth_at"] = datetime.now(timezone.utc)
+            st.session_state["auth_must_change"] = user["must_change"]
+            st.rerun()
 
-st.caption(t("cache_note"))
+
+def _change_password_form():
+    from db import cur_theme, t
+    _login_css()
+    _login_sidebar()
+    th = cur_theme()
+    st.warning(t("pw_required"))
+
+    _, mid, _ = st.columns([1, 2, 1])
+    with mid:
+        with st.form("chpass"):
+            p1 = st.text_input(t("pw_new"), type="password")
+            p2 = st.text_input(t("pw_repeat"), type="password")
+            ok = st.form_submit_button(t("pw_save"), type="primary",
+                                       use_container_width=True)
+        if ok:
+            if len(p1) < 8:
+                st.error(t("pw_short"))
+            elif p1 != p2:
+                st.error(t("pw_mismatch"))
+            else:
+                set_password(st.session_state["auth_user"], p1,
+                             force_change=False)
+                st.session_state["auth_must_change"] = False
+                st.success(t("pw_changed"))
+                st.rerun()
+
+
+def require_auth(page: str = None):
+    """Ставиться на початку КОЖНОЇ сторінки, одразу після set_page_config.
+
+    Повертає dict користувача або зупиняє рендер сторінки."""
+    try:
+        init_auth()
+    except Exception as e:
+        st.error(f"Не вдалось ініціалізувати авторизацію: {e}")
+        st.stop()
+
+    if not _session_valid():
+        if not _has_any_user():
+            _no_users_hint()
+            st.stop()
+        _login_form()
+        st.stop()
+
+    if st.session_state.get("auth_must_change"):
+        _change_password_form()
+        st.stop()
+
+    role = st.session_state.get("auth_role", "user")
+
+    # сторінки тільки для адміна
+    from db import t
+    if page and page in ADMIN_ONLY_PAGES and role != "admin":
+        st.error(t("admin_only"))
+        st.stop()
+
+    # фіксуємо відкриття сторінки — але не частіше разу на сесію,
+    # інакше кожен rerun Streamlit писав би новий рядок
+    if page:
+        seen = st.session_state.setdefault("_pages_seen", set())
+        if page not in seen:
+            seen.add(page)
+            log_action("page_open", page)
+
+    return {
+        "username": st.session_state["auth_user"],
+        "role": role,
+        "name": st.session_state.get("auth_name"),
+    }
+
+
+def sidebar_user_block():
+    """Блок користувача в сайдбарі: хто увійшов і кнопка виходу."""
+    from db import cur_theme, t
+    th = cur_theme()
+    user = st.session_state.get("auth_name") or st.session_state.get("auth_user")
+    role = st.session_state.get("auth_role", "user")
+    if not user:
+        return
+
+    with st.sidebar:
+        st.markdown("---")
+        st.markdown(
+            f'<div style="color:{th["muted"]};font-size:11px;'
+            f'letter-spacing:.1em;text-transform:uppercase;">'
+            f'{t("role_admin") if role == "admin" else t("role_user")}</div>'
+            f'<div style="color:{th["text"]};font-size:14px;'
+            f'font-weight:600;margin-bottom:8px;">{user}</div>',
+            unsafe_allow_html=True)
+        if st.button(t("logout"), key="logout_btn", use_container_width=True,
+                     icon=":material/logout:"):
+            for k in ("auth_user", "auth_role", "auth_name", "auth_at",
+                      "auth_must_change"):
+                st.session_state.pop(k, None)
+            st.rerun()
+
+
+def is_admin() -> bool:
+    return st.session_state.get("auth_role") == "admin"
