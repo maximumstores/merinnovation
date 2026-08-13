@@ -111,6 +111,19 @@ def plotly_layout(title: str | None = None) -> dict:
 
 TRANSLATIONS = {
     "uk": {
+        "login_subtitle": "Аналітичний кабінет",
+        "login_user": "Логін", "login_pass": "Пароль",
+        "login_btn": "Увійти", "logout": "Вийти",
+        "login_empty": "Введи логін і пароль",
+        "login_bad": "Невірний логін або пароль",
+        "login_throttled": "Забагато невдалих спроб. Спробуй за 15 хвилин.",
+        "login_disabled": "Доступ вимкнено. Зверніться до адміністратора.",
+        "role_admin": "Адміністратор", "role_user": "Користувач",
+        "admin_only": "Ця сторінка доступна лише адміністратору",
+        "pw_required": "Потрібно змінити пароль перед роботою",
+        "pw_new": "Новий пароль", "pw_repeat": "Повторіть пароль",
+        "pw_save": "Зберегти", "pw_short": "Пароль не коротший за 8 символів",
+        "pw_mismatch": "Паролі не збігаються", "pw_changed": "Пароль змінено",
         "nav_overview": "Огляд", "nav_stock": "Залишки",
         "overview_title": "Merinnovation — Огляд",
         "stock_title": "Залишки FBA",
@@ -314,6 +327,19 @@ TRANSLATIONS = {
         "sort_order_label": "Порядок",
     },
     "ru": {
+        "login_subtitle": "Аналитический кабинет",
+        "login_user": "Логин", "login_pass": "Пароль",
+        "login_btn": "Войти", "logout": "Выйти",
+        "login_empty": "Введи логин и пароль",
+        "login_bad": "Неверный логин или пароль",
+        "login_throttled": "Слишком много попыток. Попробуй через 15 минут.",
+        "login_disabled": "Доступ отключён. Обратитесь к администратору.",
+        "role_admin": "Администратор", "role_user": "Пользователь",
+        "admin_only": "Страница доступна только администратору",
+        "pw_required": "Нужно сменить пароль перед работой",
+        "pw_new": "Новый пароль", "pw_repeat": "Повторите пароль",
+        "pw_save": "Сохранить", "pw_short": "Пароль не короче 8 символов",
+        "pw_mismatch": "Пароли не совпадают", "pw_changed": "Пароль изменён",
         "nav_overview": "Обзор", "nav_stock": "Остатки",
         "overview_title": "Merinnovation — Обзор",
         "stock_title": "Остатки FBA",
@@ -517,6 +543,19 @@ TRANSLATIONS = {
         "sort_order_label": "Порядок",
     },
     "en": {
+        "login_subtitle": "Analytics dashboard",
+        "login_user": "Login", "login_pass": "Password",
+        "login_btn": "Sign in", "logout": "Sign out",
+        "login_empty": "Enter login and password",
+        "login_bad": "Invalid login or password",
+        "login_throttled": "Too many attempts. Try again in 15 minutes.",
+        "login_disabled": "Access disabled. Contact the administrator.",
+        "role_admin": "Administrator", "role_user": "User",
+        "admin_only": "This page is for administrators only",
+        "pw_required": "You must change your password first",
+        "pw_new": "New password", "pw_repeat": "Repeat password",
+        "pw_save": "Save", "pw_short": "Password must be 8+ characters",
+        "pw_mismatch": "Passwords do not match", "pw_changed": "Password changed",
         "nav_overview": "Overview", "nav_stock": "Stock",
         "overview_title": "Merinnovation — Overview",
         "stock_title": "FBA Stock",
@@ -847,8 +886,12 @@ def inject_css():
     th = cur_theme()
     st.markdown(f"""
 <style>
-[data-testid="stSidebarNav"] {{ display: none; }}
+[data-testid="stSidebarNav"] {{ display: none !important; }}
 [data-testid="stToolbar"] {{ display: none !important; }}
+[data-testid="stAppDeployButton"] {{ display: none !important; }}
+[data-testid="stActionButtonIcon"] {{ display: none !important; }}
+.stAppDeployButton, .stDeployButton {{ display: none !important; }}
+[data-testid="stHeaderActionElements"] {{ display: none !important; }}
 [data-testid="stDecoration"] {{ display: none !important; }}
 [data-testid="stStatusWidget"] {{ display: none !important; }}
 #MainMenu {{ visibility: hidden; }}
