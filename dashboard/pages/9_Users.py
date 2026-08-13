@@ -44,31 +44,36 @@ st.markdown("")
 
 
 # ------------------------------------------------- власний пароль ----
-with st.expander("🔑 Змінити свій пароль"):
+with st.expander("🔑 Мій пароль"):
+    st.caption("Ти вже увійшов у систему, тому старий пароль не потрібен. "
+               "Впиши новий або згенеруй.")
+
+    if st.button("Згенерувати", key="gen_own_pw",
+                 icon=":material/casino:"):
+        st.session_state["own_pw_value"] = auth.generate_password()
+        st.rerun()
+
     with st.form("own_pw"):
-        oc1, oc2, oc3 = st.columns(3)
+        oc1, oc2 = st.columns([3, 1])
         with oc1:
-            old_pw = st.text_input("Поточний пароль", type="password")
+            new_pw = st.text_input(
+                "Новий пароль",
+                value=st.session_state.get("own_pw_value", ""),
+                key="own_pw_input")
         with oc2:
-            new_pw = st.text_input("Новий пароль", type="password")
-        with oc3:
-            new_pw2 = st.text_input("Повторіть новий", type="password")
-        save_own = st.form_submit_button("Зберегти", type="primary")
+            st.markdown("<div style='height:28px'></div>",
+                        unsafe_allow_html=True)
+            save_own = st.form_submit_button("Зберегти", type="primary",
+                                             use_container_width=True)
 
     if save_own:
-        if new_pw != new_pw2:
-            st.error("Нові паролі не збігаються")
+        if len(new_pw) < 8:
+            st.error("Пароль має бути не коротшим за 8 символів")
         else:
-            ok, code = auth.change_own_password(user["username"], old_pw, new_pw)
-            if ok:
-                auth.log_action("password_change_own")
-                st.success("Пароль змінено")
-            elif code == "old_wrong":
-                st.error("Поточний пароль невірний")
-            elif code == "too_short":
-                st.error("Новий пароль має бути не коротшим за 8 символів")
-            else:
-                st.error("Не вдалось змінити пароль")
+            auth.set_password(user["username"], new_pw, force_change=False)
+            auth.log_action("password_change_own")
+            st.session_state.pop("own_pw_value", None)
+            st.success(f"Пароль змінено: **{new_pw}**")
 
 # --------------------------------------------------- створення нового ----
 with st.expander("➕ Додати користувача", expanded=len(users) <= 1):
