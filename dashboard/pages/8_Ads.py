@@ -172,6 +172,8 @@ if not ai_ok.empty and int(ai_ok["n"].iloc[0]) > 0:
         ai_row = pd.DataFrame()
 
     ac1, ac2 = st.columns([5, 1])
+    queued_msg = None
+    queued_err = None
     with ac2:
         if st.button(t("ads_ai_refresh"), key="ads_ai_btn",
                      icon=":material/auto_awesome:", use_container_width=True):
@@ -182,9 +184,9 @@ if not ai_ok.empty and int(ai_ok["n"].iloc[0]) > 0:
                         INSERT INTO merinnovation.job_queue (script, requested_by)
                         VALUES ('10_ai_analyst.py', 'dashboard_ads')
                     """)
-                st.success(t("ai_refresh_queued"))
+                queued_msg = t("ai_refresh_queued")
             except Exception as e:
-                st.error(f"{t('ai_refresh_failed')}: {e}")
+                queued_err = str(e)
 
     if not ai_row.empty:
         r = ai_row.iloc[0]
@@ -258,6 +260,13 @@ if not ai_ok.empty and int(ai_ok["n"].iloc[0]) > 0:
     else:
         with ac1:
             st.caption(t("ads_ai_none"))
+
+    # повідомлення — на всю ширину, інакше воно розтягує вузьку колонку
+    # кнопки на сім рядків і ламає верстку
+    if queued_msg:
+        st.success(queued_msg, icon="⏳")
+    if queued_err:
+        st.error(f"{t('ai_refresh_failed')}: {queued_err}")
 
 st.markdown("")
 
