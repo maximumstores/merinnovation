@@ -1,0 +1,399 @@
+# -*- coding: utf-8 -*-
+"""Авторизація кабінету: логін, ролі, керування користувачами.
+
+Ролі:
+    admin  — бачить усе, керує користувачами
+    user   — робочі сторінки, без Алертів і технічного
+
+Паролі зберігаються ХЕШЕМ (bcrypt), не текстом. Навіть маючи доступ до
+бази, пароль відновити не можна — це важливо, бо в тій самій базі лежать
+дані продажів, і компрометація одного не має відкривати інше.
+"""
+
+import os
+import secrets
+import string
+from datetime import datetime, timedelta, timezone
+
+import pandas as pd
+import psycopg2
+import streamlit as st
+
+try:
+    import bcrypt
+    HAS_BCRYPT = True
+except ImportError:
+    HAS_BCRYPT = False
+    import hashlib
+
+# Сторінки, доступні лише адміну
+ADMIN_ONLY_PAGES = {"7_Alerts"}
+
+SESSION_HOURS = 12
+
+
+# ------------------------------------------------------------- паролі ----
+
+def hash_password(password: str) -> str:
+    if HAS_BCRYPT:
+        return bcrypt.hashpw(password.encode("utf-8"),
+                             bcrypt.gensalt()).decode("utf-8")
+    # запасний варіант, якщо bcrypt не встановлено: salted sha256
+    salt = secrets.token_hex(16)
+    h = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+    return f"sha256${salt}${h}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    if not stored:
+        return False
+    if stored.startswith("sha256$"):
+        _, salt, h = stored.split("$", 2)
+        return hashlib.sha256((salt + password).encode("utf-8")).hexdigest() == h
+    if HAS_BCRYPT:
+        try:
+            return bcrypt.checkpw(password.encode("utf-8"),
+                                  stored.encode("utf-8"))
+        except Exception:
+            return False
+    return False
+
+
+def generate_password(length: int = 12) -> str:
+    """Читабельний пароль без символів, які плутають: 0/O, 1/l/I."""
+    alphabet = "".join(c for c in (string.ascii_letters + string.digits)
+                       if c not in "0O1lI")
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+# ---------------------------------------------------------------- БД ----
+
+def _conn():
+    from db import get_conn
+    return get_conn()
+
+
+def init_auth(conn=None):
+    """Таблиця користувачів + перший адмін із .env."""
+    conn = conn or _conn()
+    with conn.cursor() as cur:
+        cur.execute("CREATE SCHEMA IF NOT EXISTS merinnovation;")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS merinnovation.users (
+                username TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                full_name TEXT,
+                role TEXT NOT NULL DEFAULT 'user',
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                must_change_password BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                created_by TEXT,
+                last_login TIMESTAMPTZ,
+                login_count INT DEFAULT 0
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS merinnovation.login_log (
+                id BIGSERIAL PRIMARY KEY,
+                username TEXT,
+                success BOOLEAN,
+                at TIMESTAMPTZ DEFAULT now()
+            );
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_login_log_at
+            ON merinnovation.login_log (at DESC);
+        """)
+
+        # Перший адмін — з .env або secrets. Створюється один раз;
+        # далі користувачами керує сам адмін через кабінет.
+        cur.execute("SELECT COUNT(*) FROM merinnovation.users WHERE role='admin'")
+        if cur.fetchone()[0] == 0:
+            admin_user = _get_secret("ADMIN_USER")
+            admin_pass = _get_secret("ADMIN_PASSWORD")
+            if admin_user and admin_pass:
+                cur.execute("""
+                    INSERT INTO merinnovation.users
+                        (username, password_hash, full_name, role,
+                         must_change_password, created_by)
+                    VALUES (%s, %s, %s, 'admin', FALSE, 'bootstrap')
+                    ON CONFLICT (username) DO NOTHING
+                """, (admin_user.strip().lower(), hash_password(admin_pass),
+                      "Адміністратор"))
+    conn.commit()
+
+
+def _get_secret(key: str):
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return os.getenv(key)
+
+
+def get_user(username: str):
+    conn = _conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT username, password_hash, full_name, role, is_active,
+                   must_change_password
+            FROM merinnovation.users WHERE username = %s
+        """, (username.strip().lower(),))
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {"username": row[0], "password_hash": row[1], "full_name": row[2],
+            "role": row[3], "is_active": row[4], "must_change": row[5]}
+
+
+def log_attempt(username: str, success: bool):
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO merinnovation.login_log (username, success)
+                VALUES (%s, %s)
+            """, (username, success))
+        conn.commit()
+    except Exception:
+        pass
+
+
+def mark_login(username: str):
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE merinnovation.users
+                SET last_login = now(), login_count = COALESCE(login_count,0)+1
+                WHERE username = %s
+            """, (username,))
+        conn.commit()
+    except Exception:
+        pass
+
+
+def too_many_attempts(username: str) -> bool:
+    """Захист від перебору: 5 невдалих спроб за 15 хвилин."""
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) FROM merinnovation.login_log
+                WHERE username = %s AND success = FALSE
+                  AND at > now() - INTERVAL '15 minutes'
+            """, (username,))
+            return cur.fetchone()[0] >= 5
+    except Exception:
+        return False
+
+
+# ------------------------------------------------------ користувачі ----
+
+def list_users() -> pd.DataFrame:
+    conn = _conn()
+    return pd.read_sql("""
+        SELECT username, full_name, role, is_active, must_change_password,
+               created_at, created_by, last_login, login_count
+        FROM merinnovation.users ORDER BY role, username
+    """, conn)
+
+
+def create_user(username, password, full_name, role, created_by):
+    conn = _conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO merinnovation.users
+                (username, password_hash, full_name, role, created_by)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (username.strip().lower(), hash_password(password),
+              full_name, role, created_by))
+    conn.commit()
+
+
+def set_password(username: str, password: str, force_change: bool = True):
+    conn = _conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE merinnovation.users
+            SET password_hash = %s, must_change_password = %s
+            WHERE username = %s
+        """, (hash_password(password), force_change, username.strip().lower()))
+    conn.commit()
+
+
+def set_active(username: str, active: bool):
+    conn = _conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE merinnovation.users SET is_active = %s WHERE username = %s
+        """, (active, username.strip().lower()))
+    conn.commit()
+
+
+def set_role(username: str, role: str):
+    conn = _conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE merinnovation.users SET role = %s WHERE username = %s
+        """, (role, username.strip().lower()))
+    conn.commit()
+
+
+def delete_user(username: str):
+    conn = _conn()
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM merinnovation.users WHERE username = %s",
+                    (username.strip().lower(),))
+    conn.commit()
+
+
+# --------------------------------------------------------------- UI ----
+
+def _session_valid() -> bool:
+    if not st.session_state.get("auth_user"):
+        return False
+    ts = st.session_state.get("auth_at")
+    if not ts:
+        return False
+    return (datetime.now(timezone.utc) - ts) < timedelta(hours=SESSION_HOURS)
+
+
+def _login_form():
+    from db import ACCENT, cur_theme
+    th = cur_theme()
+
+    st.markdown(
+        f'<div style="max-width:420px;margin:8vh auto 0 auto;">'
+        f'<div style="color:{th["text"]};font-size:30px;font-weight:700;'
+        f'letter-spacing:-0.02em;margin-bottom:6px;">Merinnovation</div>'
+        f'<div style="color:{th["muted"]};font-size:14px;margin-bottom:24px;">'
+        f'Аналітичний кабінет</div></div>', unsafe_allow_html=True)
+
+    _, mid, _ = st.columns([1, 2, 1])
+    with mid:
+        with st.form("login_form"):
+            username = st.text_input("Логін", key="li_user")
+            password = st.text_input("Пароль", type="password", key="li_pass")
+            submitted = st.form_submit_button("Увійти", type="primary",
+                                              use_container_width=True)
+
+        if submitted:
+            u = (username or "").strip().lower()
+            if not u or not password:
+                st.error("Введи логін і пароль")
+                return
+
+            if too_many_attempts(u):
+                st.error("Забагато невдалих спроб. Спробуй за 15 хвилин.")
+                return
+
+            user = get_user(u)
+            if not user or not verify_password(password, user["password_hash"]):
+                log_attempt(u, False)
+                # навмисно не уточнюємо, що саме невірне — щоб не давати
+                # підказку про існування логіна
+                st.error("Невірний логін або пароль")
+                return
+
+            if not user["is_active"]:
+                log_attempt(u, False)
+                st.error("Доступ вимкнено. Зверніться до адміністратора.")
+                return
+
+            log_attempt(u, True)
+            mark_login(u)
+            st.session_state["auth_user"] = user["username"]
+            st.session_state["auth_role"] = user["role"]
+            st.session_state["auth_name"] = user["full_name"] or user["username"]
+            st.session_state["auth_at"] = datetime.now(timezone.utc)
+            st.session_state["auth_must_change"] = user["must_change"]
+            st.rerun()
+
+
+def _change_password_form():
+    from db import cur_theme
+    th = cur_theme()
+    st.warning("Потрібно змінити пароль перед роботою")
+
+    _, mid, _ = st.columns([1, 2, 1])
+    with mid:
+        with st.form("chpass"):
+            p1 = st.text_input("Новий пароль", type="password")
+            p2 = st.text_input("Повторіть пароль", type="password")
+            ok = st.form_submit_button("Зберегти", type="primary",
+                                       use_container_width=True)
+        if ok:
+            if len(p1) < 8:
+                st.error("Пароль має бути не коротшим за 8 символів")
+            elif p1 != p2:
+                st.error("Паролі не збігаються")
+            else:
+                set_password(st.session_state["auth_user"], p1,
+                             force_change=False)
+                st.session_state["auth_must_change"] = False
+                st.success("Пароль змінено")
+                st.rerun()
+
+
+def require_auth(page: str = None):
+    """Ставиться на початку КОЖНОЇ сторінки, одразу після set_page_config.
+
+    Повертає dict користувача або зупиняє рендер сторінки."""
+    try:
+        init_auth()
+    except Exception as e:
+        st.error(f"Не вдалось ініціалізувати авторизацію: {e}")
+        st.stop()
+
+    if not _session_valid():
+        _login_form()
+        st.stop()
+
+    if st.session_state.get("auth_must_change"):
+        _change_password_form()
+        st.stop()
+
+    role = st.session_state.get("auth_role", "user")
+
+    # сторінки тільки для адміна
+    if page and page in ADMIN_ONLY_PAGES and role != "admin":
+        st.error("Ця сторінка доступна лише адміністратору")
+        st.stop()
+
+    return {
+        "username": st.session_state["auth_user"],
+        "role": role,
+        "name": st.session_state.get("auth_name"),
+    }
+
+
+def sidebar_user_block():
+    """Блок користувача в сайдбарі: хто увійшов і кнопка виходу."""
+    from db import cur_theme
+    th = cur_theme()
+    user = st.session_state.get("auth_name") or st.session_state.get("auth_user")
+    role = st.session_state.get("auth_role", "user")
+    if not user:
+        return
+
+    with st.sidebar:
+        st.markdown("---")
+        st.markdown(
+            f'<div style="color:{th["muted"]};font-size:11px;'
+            f'letter-spacing:.1em;text-transform:uppercase;">'
+            f'{"Адміністратор" if role == "admin" else "Користувач"}</div>'
+            f'<div style="color:{th["text"]};font-size:14px;'
+            f'font-weight:600;margin-bottom:8px;">{user}</div>',
+            unsafe_allow_html=True)
+        if st.button("Вийти", key="logout_btn", use_container_width=True,
+                     icon=":material/logout:"):
+            for k in ("auth_user", "auth_role", "auth_name", "auth_at",
+                      "auth_must_change"):
+                st.session_state.pop(k, None)
+            st.rerun()
+
+
+def is_admin() -> bool:
+    return st.session_state.get("auth_role") == "admin"
