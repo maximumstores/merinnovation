@@ -200,6 +200,7 @@ TRANSLATIONS = {
         "ads_waste_note": "{n} кампаній рекламують SKU з нульовим залишком і без поставок у дорозі",
         "ads_waste_hint": "Збіг визначається за назвою кампанії — перевір перед вимкненням. Реклама товару, який неможливо купити, витрачає бюджет і псує показники лістингу.",
         "ads_legend": "🔴 витрати без продажів · 🟡 ACOS вище 60%",
+        "nav_users": "Користувачі",
         "nav_alerts": "Алерти", "alerts_title": "Алерти системи",
         "no_alerts_data": "Немає даних — запусти 12_watchdog.py",
         "alerts_info_block": "Довідково",
@@ -402,6 +403,7 @@ TRANSLATIONS = {
         "ads_waste_note": "{n} кампаний рекламируют SKU с нулевым остатком и без поставок в пути",
         "ads_waste_hint": "Совпадение определяется по названию кампании — проверь перед отключением. Реклама товара, который нельзя купить, тратит бюджет и портит показатели листинга.",
         "ads_legend": "🔴 расходы без продаж · 🟡 ACOS выше 60%",
+        "nav_users": "Пользователи",
         "nav_alerts": "Алерты", "alerts_title": "Алерты системы",
         "no_alerts_data": "Нет данных — запусти 12_watchdog.py",
         "alerts_info_block": "Справочно",
@@ -604,6 +606,7 @@ The total counts **matured dates only** — otherwise zeros from recent days wou
         "ads_waste_note": "{n} campaigns advertise SKUs with zero stock and nothing inbound",
         "ads_waste_hint": "Matched by campaign name — verify before pausing. Advertising something that cannot be bought wastes budget and hurts listing metrics.",
         "ads_legend": "🔴 spend with no sales · 🟡 ACOS above 60%",
+        "nav_users": "Users",
         "nav_alerts": "Alerts", "alerts_title": "System alerts",
         "no_alerts_data": "No data — run 12_watchdog.py",
         "alerts_info_block": "For reference",
@@ -764,7 +767,16 @@ def lang_selector() -> str:
         st.page_link("pages/5_Reviews.py", label=t("nav_reviews"), icon=":material/star:")
         st.page_link("pages/6_AI.py", label=t("nav_ai"), icon=":material/auto_awesome:")
         st.page_link("pages/8_Ads.py", label=t("nav_ads"), icon=":material/campaign:")
-        st.page_link("pages/7_Alerts.py", label=t("nav_alerts"), icon=":material/notifications_active:")
+        # Алерти й Користувачі — лише для адміна: технічні алерти
+        # звичайному користувачу нічого не дають, лише відволікають
+        try:
+            import auth as _auth
+            _is_admin = _auth.is_admin()
+        except Exception:
+            _is_admin = True
+        if _is_admin:
+            st.page_link("pages/7_Alerts.py", label=t("nav_alerts"), icon=":material/notifications_active:")
+            st.page_link("pages/9_Users.py", label=t("nav_users"), icon=":material/group:")
         st.markdown("---")
 
         cols = st.columns(3)
