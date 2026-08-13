@@ -85,7 +85,11 @@ with st.expander("➕ Додати користувача", expanded=len(users) 
                                         else "Адміністратор — повний доступ"))
             gen_pass = st.text_input(
                 "Пароль", value=auth.generate_password(),
-                help="Згенеровано автоматично — можна замінити своїм")
+                help="Згенеровано автоматично — можеш вписати свій")
+            keep_pw = st.checkbox(
+                "Залишити цей пароль", value=True,
+                help="Якщо зняти — при першому вході людина задасть свій "
+                     "пароль, і ти його вже не знатимеш")
 
         created = st.form_submit_button("Створити", type="primary")
 
@@ -100,13 +104,15 @@ with st.expander("➕ Додати користувача", expanded=len(users) 
         else:
             try:
                 auth.create_user(login, gen_pass, new_name or login,
-                                 new_role, user["username"])
+                                 new_role, user["username"],
+                                 must_change=not keep_pw)
                 auth.log_action("user_create", login)
                 st.success("Користувача створено")
-                st.info(f"Передай ці дані особисто:\n\n"
+                tail = ("" if keep_pw else
+                        "\n\nПри першому вході людина задасть свій пароль.")
+                st.info(f"Дані для входу:\n\n"
                         f"Логін: **{login}**\n\n"
-                        f"Пароль: **{gen_pass}**\n\n"
-                        f"При першому вході система попросить змінити пароль.")
+                        f"Пароль: **{gen_pass}**{tail}")
             except Exception as e:
                 st.error(f"Не вдалось створити: {e}")
 
@@ -152,20 +158,11 @@ else:
                         st.button("Пароль", key=f"pw_{u['username']}",
                                   disabled=True, use_container_width=True,
                                   help="Свій пароль — у блоці «Змінити свій пароль» вище")
-                    elif st.session_state.get(f"confirm_pw_{u['username']}"):
-                        if st.button("Точно?", key=f"pwc_{u['username']}",
-                                     type="primary", use_container_width=True):
-                            newp = auth.generate_password()
-                            auth.set_password(u["username"], newp)
-                            auth.log_action("password_reset", u["username"])
-                            st.session_state[f"shown_pw_{u['username']}"] = newp
-                            st.session_state.pop(f"confirm_pw_{u['username']}", None)
-                            st.rerun()
                     else:
-                        if st.button("Скинути", key=f"pw_{u['username']}",
+                        if st.button("Пароль", key=f"pw_{u['username']}",
                                      use_container_width=True,
-                                     help="Згенерувати новий пароль для цієї людини"):
-                            st.session_state[f"confirm_pw_{u['username']}"] = True
+                                     help="Задати новий пароль цій людині"):
+                            st.session_state[f"setpw_{u['username']}"] = True
                             st.rerun()
                 with bc2:
                     if is_self:
@@ -220,10 +217,44 @@ else:
                             auth.log_action("role_change", f"{u['username']}→admin")
                             st.rerun()
 
+            # форма задання пароля конкретній людині
+            if st.session_state.get(f"setpw_{u['username']}"):
+                with st.form(f"setpw_form_{u['username']}"):
+                    pc1, pc2, pc3 = st.columns([2, 1, 1])
+                    with pc1:
+                        manual_pw = st.text_input(
+                            f"Новий пароль для {u['username']}",
+                            value=auth.generate_password(),
+                            key=f"mp_{u['username']}")
+                    with pc2:
+                        force = st.checkbox(
+                            "Хай змінить сам", value=False,
+                            key=f"fc_{u['username']}",
+                            help="Людина задасть свій пароль при вході — "
+                                 "тоді ти його не знатимеш")
+                    with pc3:
+                        st.markdown("<div style='height:28px'></div>",
+                                    unsafe_allow_html=True)
+                        apply_pw = st.form_submit_button("Застосувати",
+                                                         type="primary",
+                                                         use_container_width=True)
+                if apply_pw:
+                    if len(manual_pw) < 8:
+                        st.error("Пароль не коротший за 8 символів")
+                    else:
+                        auth.set_password(u["username"], manual_pw,
+                                          force_change=force)
+                        auth.log_action("password_set", u["username"])
+                        st.session_state[f"shown_pw_{u['username']}"] = manual_pw
+                        st.session_state.pop(f"setpw_{u['username']}", None)
+                        st.rerun()
+                if st.button("Скасувати", key=f"cancel_pw_{u['username']}"):
+                    st.session_state.pop(f"setpw_{u['username']}", None)
+                    st.rerun()
+
             shown = st.session_state.get(f"shown_pw_{u['username']}")
             if shown:
-                st.info(f"Новий пароль для **{u['username']}**: **{shown}** "
-                        f"— передай особисто, при вході попросить змінити")
+                st.info(f"Пароль для **{u['username']}**: **{shown}**")
                 if st.button("Приховати", key=f"hide_{u['username']}"):
                     st.session_state.pop(f"shown_pw_{u['username']}", None)
                     st.rerun()
@@ -240,6 +271,7 @@ ACTION_LABELS = {
     "user_disable": "вимкнув",
     "user_enable": "увімкнув",
     "password_reset": "скинув пароль",
+    "password_set": "задав пароль",
     "password_change_own": "змінив свій пароль",
     "role_change": "змінив роль",
 }
