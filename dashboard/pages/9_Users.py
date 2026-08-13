@@ -42,6 +42,34 @@ with c3:
 
 st.markdown("")
 
+
+# ------------------------------------------------- власний пароль ----
+with st.expander("🔑 Змінити свій пароль"):
+    with st.form("own_pw"):
+        oc1, oc2, oc3 = st.columns(3)
+        with oc1:
+            old_pw = st.text_input("Поточний пароль", type="password")
+        with oc2:
+            new_pw = st.text_input("Новий пароль", type="password")
+        with oc3:
+            new_pw2 = st.text_input("Повторіть новий", type="password")
+        save_own = st.form_submit_button("Зберегти", type="primary")
+
+    if save_own:
+        if new_pw != new_pw2:
+            st.error("Нові паролі не збігаються")
+        else:
+            ok, code = auth.change_own_password(user["username"], old_pw, new_pw)
+            if ok:
+                auth.log_action("password_change_own")
+                st.success("Пароль змінено")
+            elif code == "old_wrong":
+                st.error("Поточний пароль невірний")
+            elif code == "too_short":
+                st.error("Новий пароль має бути не коротшим за 8 символів")
+            else:
+                st.error("Не вдалось змінити пароль")
+
 # --------------------------------------------------- створення нового ----
 with st.expander("➕ Додати користувача", expanded=len(users) <= 1):
     with st.form("new_user"):
@@ -73,6 +101,7 @@ with st.expander("➕ Додати користувача", expanded=len(users) 
             try:
                 auth.create_user(login, gen_pass, new_name or login,
                                  new_role, user["username"])
+                auth.log_action("user_create", login)
                 st.success("Користувача створено")
                 st.info(f"Передай ці дані особисто:\n\n"
                         f"Логін: **{login}**\n\n"
@@ -117,12 +146,27 @@ else:
             with uc2:
                 bc1, bc2, bc3 = st.columns(3)
                 with bc1:
-                    if st.button("Пароль", key=f"pw_{u['username']}",
-                                 use_container_width=True):
-                        newp = auth.generate_password()
-                        auth.set_password(u["username"], newp)
-                        st.session_state[f"shown_pw_{u['username']}"] = newp
-                        st.rerun()
+                    if is_self:
+                        # свій пароль міняємо усвідомлено — зі старим,
+                        # у блоці вище, а не випадковою генерацією
+                        st.button("Пароль", key=f"pw_{u['username']}",
+                                  disabled=True, use_container_width=True,
+                                  help="Свій пароль — у блоці «Змінити свій пароль» вище")
+                    elif st.session_state.get(f"confirm_pw_{u['username']}"):
+                        if st.button("Точно?", key=f"pwc_{u['username']}",
+                                     type="primary", use_container_width=True):
+                            newp = auth.generate_password()
+                            auth.set_password(u["username"], newp)
+                            auth.log_action("password_reset", u["username"])
+                            st.session_state[f"shown_pw_{u['username']}"] = newp
+                            st.session_state.pop(f"confirm_pw_{u['username']}", None)
+                            st.rerun()
+                    else:
+                        if st.button("Скинути", key=f"pw_{u['username']}",
+                                     use_container_width=True,
+                                     help="Згенерувати новий пароль для цієї людини"):
+                            st.session_state[f"confirm_pw_{u['username']}"] = True
+                            st.rerun()
                 with bc2:
                     if is_self:
                         st.button("—", key=f"na_{u['username']}",
@@ -131,20 +175,28 @@ else:
                         if st.button("Вимкнути", key=f"off_{u['username']}",
                                      use_container_width=True):
                             auth.set_active(u["username"], False)
+                            auth.log_action("user_disable", u["username"])
                             st.rerun()
                     else:
                         if st.button("Увімкнути", key=f"on_{u['username']}",
                                      use_container_width=True):
                             auth.set_active(u["username"], True)
+                            auth.log_action("user_enable", u["username"])
                             st.rerun()
                 with bc3:
                     if is_self:
                         st.button("—", key=f"nd_{u['username']}",
                                   disabled=True, use_container_width=True)
+                    elif st.session_state.get(f"confirm_del_{u['username']}"):
+                        if st.button("Точно?", key=f"delc_{u['username']}",
+                                     type="primary", use_container_width=True):
+                            auth.delete_user(u["username"])
+                            auth.log_action("user_delete", u["username"])
+                            st.rerun()
                     else:
                         if st.button("Видалити", key=f"del_{u['username']}",
                                      use_container_width=True):
-                            auth.delete_user(u["username"])
+                            st.session_state[f"confirm_del_{u['username']}"] = True
                             st.rerun()
 
             shown = st.session_state.get(f"shown_pw_{u['username']}")
@@ -159,6 +211,49 @@ else:
 
 # ------------------------------------------------------------ журнал ----
 st.markdown("")
+
+ACTION_LABELS = {
+    "page_open": "відкрив",
+    "user_create": "створив користувача",
+    "user_delete": "видалив користувача",
+    "user_disable": "вимкнув",
+    "user_enable": "увімкнув",
+    "password_reset": "скинув пароль",
+    "password_change_own": "змінив свій пароль",
+}
+PAGE_LABELS = {
+    "app": "Огляд", "1_Stock": "Залишки", "2_Traffic": "Трафік",
+    "3_Finance": "Фінанси", "4_Forecast": "Прогноз", "5_Reviews": "Відгуки",
+    "6_AI": "AI-аналітик", "7_Alerts": "Алерти", "8_Ads": "Реклама",
+    "9_Users": "Користувачі",
+}
+
+with st.expander("Хто що робив"):
+    acts = q("""
+        SELECT username, action, target, at
+        FROM merinnovation.activity_log
+        ORDER BY at DESC LIMIT 80
+    """)
+    if acts.empty:
+        st.caption("Записів ще немає")
+    else:
+        for _, r in acts.iterrows():
+            label = ACTION_LABELS.get(r["action"], r["action"])
+            tgt = r["target"] or ""
+            if r["action"] == "page_open":
+                tgt = PAGE_LABELS.get(tgt, tgt)
+            st.markdown(
+                f'<div style="display:flex;gap:14px;padding:6px 0;'
+                f'border-bottom:1px solid {th["border"]};font-size:13px;">'
+                f'<span style="color:{th["muted"]};min-width:88px;'
+                f'font-variant-numeric:tabular-nums;">'
+                f'{pd.to_datetime(r["at"]):%d.%m %H:%M}</span>'
+                f'<span style="color:{th["text"]};font-weight:600;'
+                f'min-width:120px;">{r["username"]}</span>'
+                f'<span style="color:{th["muted"]};">{label} '
+                f'<b style="color:{th["text"]};">{tgt}</b></span></div>',
+                unsafe_allow_html=True)
+
 with st.expander("Журнал входів"):
     log = q("""
         SELECT username, success, at
@@ -180,4 +275,4 @@ with st.expander("Журнал входів"):
                 unsafe_allow_html=True)
 
 st.caption("Паролі зберігаються хешем — відновити їх неможливо, "
-           "лише згенерувати новий") 
+           "лише згенерувати новий")
