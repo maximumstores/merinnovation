@@ -136,113 +136,116 @@ else:
         status_text = "активний" if u["is_active"] else "вимкнено"
         last = (pd.to_datetime(u["last_login"]).strftime("%d.%m %H:%M")
                 if pd.notna(u["last_login"]) else "жодного разу")
+        created = (pd.to_datetime(u["created_at"]).strftime("%d.%m.%Y")
+                   if pd.notna(u["created_at"]) else "—")
+        must_change = bool(u["must_change_password"])
 
-        with st.container():
-            uc1, uc2 = st.columns([3, 2])
-            with uc1:
-                st.markdown(
-                    f'<div style="background:{th["card"]};'
-                    f'border:1px solid {th["border"]};'
-                    f'border-left:3px solid {status_color};'
-                    f'border-radius:10px;padding:14px 18px;">'
-                    f'<div style="color:{th["text"]};font-size:15px;'
-                    f'font-weight:600;">{u["full_name"] or u["username"]}'
-                    f'{" (це ви)" if is_self else ""}</div>'
-                    f'<div style="color:{th["muted"]};font-size:12px;'
-                    f'margin-top:4px;">{u["username"]} · {role_label} · '
-                    f'{status_text} · вхід: {last} '
-                    f'({int(u["login_count"] or 0)})</div></div>',
-                    unsafe_allow_html=True)
+        title = (f"{u['full_name'] or u['username']}"
+                 f"{' (це ви)' if is_self else ''}  ·  {role_label}"
+                 f"{'' if u['is_active'] else '  ·  вимкнено'}")
 
-            with uc2:
-                bc1, bc2, bc3, bc4 = st.columns(4)
-                with bc1:
-                    if is_self:
-                        # свій пароль міняємо усвідомлено — зі старим,
-                        # у блоці вище, а не випадковою генерацією
-                        st.button("Пароль", key=f"pw_{u['username']}",
-                                  disabled=True, use_container_width=True,
-                                  help="Свій пароль — у блоці «Змінити свій пароль» вище")
-                    else:
-                        if st.button("Пароль", key=f"pw_{u['username']}",
-                                     use_container_width=True,
-                                     help="Задати новий пароль цій людині"):
-                            st.session_state[f"setpw_{u['username']}"] = True
-                            st.rerun()
-                with bc2:
-                    if is_self:
-                        st.button("—", key=f"na_{u['username']}",
-                                  disabled=True, use_container_width=True)
-                    elif u["is_active"]:
-                        if st.button("Вимкнути", key=f"off_{u['username']}",
-                                     use_container_width=True):
-                            auth.set_active(u["username"], False)
-                            auth.log_action("user_disable", u["username"])
-                            st.rerun()
-                    else:
-                        if st.button("Увімкнути", key=f"on_{u['username']}",
-                                     use_container_width=True):
-                            auth.set_active(u["username"], True)
-                            auth.log_action("user_enable", u["username"])
-                            st.rerun()
-                with bc3:
-                    if is_self:
-                        st.button("—", key=f"nd_{u['username']}",
-                                  disabled=True, use_container_width=True)
-                    elif st.session_state.get(f"confirm_del_{u['username']}"):
-                        if st.button("Точно?", key=f"delc_{u['username']}",
-                                     type="primary", use_container_width=True):
-                            auth.delete_user(u["username"])
-                            auth.log_action("user_delete", u["username"])
-                            st.rerun()
-                    else:
-                        if st.button("Видалити", key=f"del_{u['username']}",
-                                     use_container_width=True):
-                            st.session_state[f"confirm_del_{u['username']}"] = True
-                            st.rerun()
-                with bc4:
-                    if is_self:
-                        # себе роллю не понижуємо: інакше можна лишити
-                        # систему взагалі без адміністратора
-                        st.button("—", key=f"nr_{u['username']}",
-                                  disabled=True, use_container_width=True,
-                                  help="Свою роль змінити не можна")
-                    elif u["role"] == "admin":
-                        if st.button("→ Користувач", key=f"rl_{u['username']}",
-                                     use_container_width=True,
-                                     help="Забрати права адміністратора"):
-                            auth.set_role(u["username"], "user")
-                            auth.log_action("role_change", f"{u['username']}→user")
-                            st.rerun()
-                    else:
-                        if st.button("→ Адмін", key=f"rl_{u['username']}",
-                                     use_container_width=True,
-                                     help="Дати повний доступ, разом з Алертами"):
-                            auth.set_role(u["username"], "admin")
-                            auth.log_action("role_change", f"{u['username']}→admin")
-                            st.rerun()
+        with st.expander(title, expanded=False):
+            st.markdown(
+                f'<div style="border-left:3px solid {status_color};'
+                f'padding-left:16px;margin-bottom:14px;">'
+                f'<div style="color:{th["muted"]};font-size:13px;'
+                f'line-height:1.9;">'
+                f'Логін: <b style="color:{th["text"]};">{u["username"]}</b><br>'
+                f'Роль: <b style="color:{th["text"]};">{role_label}</b> · '
+                f'{status_text}<br>'
+                f'Створено: {created} ({u["created_by"] or "—"})<br>'
+                f'Останній вхід: {last} · всього входів: '
+                f'{int(u["login_count"] or 0)}<br>'
+                f'Пароль: {"тимчасовий, змінить при вході" if must_change else "робочий"}'
+                f'</div></div>', unsafe_allow_html=True)
 
-            # форма задання пароля конкретній людині
+            bc1, bc2, bc3, bc4 = st.columns(4)
+
+            with bc1:
+                if is_self:
+                    st.button("Пароль", key=f"pw_{u['username']}",
+                              disabled=True, use_container_width=True,
+                              help="Свій пароль — у блоці «Мій пароль» вище")
+                else:
+                    if st.button("Задати пароль", key=f"pw_{u['username']}",
+                                 use_container_width=True):
+                        st.session_state[f"setpw_{u['username']}"] = True
+                        st.rerun()
+
+            with bc2:
+                if is_self:
+                    st.button("—", key=f"na_{u['username']}", disabled=True,
+                              use_container_width=True)
+                elif u["is_active"]:
+                    if st.button("Вимкнути", key=f"off_{u['username']}",
+                                 use_container_width=True):
+                        auth.set_active(u["username"], False)
+                        auth.log_action("user_disable", u["username"])
+                        st.rerun()
+                else:
+                    if st.button("Увімкнути", key=f"on_{u['username']}",
+                                 use_container_width=True):
+                        auth.set_active(u["username"], True)
+                        auth.log_action("user_enable", u["username"])
+                        st.rerun()
+
+            with bc3:
+                if is_self:
+                    st.button("—", key=f"nr_{u['username']}", disabled=True,
+                              use_container_width=True,
+                              help="Свою роль змінити не можна")
+                elif u["role"] == "admin":
+                    if st.button("Зробити користувачем",
+                                 key=f"rl_{u['username']}",
+                                 use_container_width=True):
+                        auth.set_role(u["username"], "user")
+                        auth.log_action("role_change", f"{u['username']}→user")
+                        st.rerun()
+                else:
+                    if st.button("Зробити адміном", key=f"rl_{u['username']}",
+                                 use_container_width=True):
+                        auth.set_role(u["username"], "admin")
+                        auth.log_action("role_change", f"{u['username']}→admin")
+                        st.rerun()
+
+            with bc4:
+                if is_self:
+                    st.button("—", key=f"nd_{u['username']}", disabled=True,
+                              use_container_width=True)
+                elif st.session_state.get(f"confirm_del_{u['username']}"):
+                    if st.button("Точно видалити?", key=f"delc_{u['username']}",
+                                 type="primary", use_container_width=True):
+                        auth.delete_user(u["username"])
+                        auth.log_action("user_delete", u["username"])
+                        st.rerun()
+                else:
+                    if st.button("Видалити", key=f"del_{u['username']}",
+                                 use_container_width=True):
+                        st.session_state[f"confirm_del_{u['username']}"] = True
+                        st.rerun()
+
+            # форма задання пароля
             if st.session_state.get(f"setpw_{u['username']}"):
+                st.markdown("")
                 with st.form(f"setpw_form_{u['username']}"):
-                    pc1, pc2, pc3 = st.columns([2, 1, 1])
-                    with pc1:
-                        manual_pw = st.text_input(
-                            f"Новий пароль для {u['username']}",
-                            value=auth.generate_password(),
-                            key=f"mp_{u['username']}")
-                    with pc2:
-                        force = st.checkbox(
-                            "Хай змінить сам", value=False,
-                            key=f"fc_{u['username']}",
-                            help="Людина задасть свій пароль при вході — "
-                                 "тоді ти його не знатимеш")
-                    with pc3:
-                        st.markdown("<div style='height:28px'></div>",
-                                    unsafe_allow_html=True)
-                        apply_pw = st.form_submit_button("Застосувати",
-                                                         type="primary",
-                                                         use_container_width=True)
+                    manual_pw = st.text_input(
+                        f"Новий пароль для {u['username']}",
+                        value=auth.generate_password(),
+                        key=f"mp_{u['username']}",
+                        help="Згенеровано автоматично — можеш вписати свій")
+                    force = st.checkbox(
+                        "Хай змінить сам при вході", value=False,
+                        key=f"fc_{u['username']}",
+                        help="Тоді пароль знатиме тільки він")
+                    fc1, fc2 = st.columns(2)
+                    with fc1:
+                        apply_pw = st.form_submit_button(
+                            "Застосувати", type="primary",
+                            use_container_width=True)
+                    with fc2:
+                        cancel_pw = st.form_submit_button(
+                            "Скасувати", use_container_width=True)
+
                 if apply_pw:
                     if len(manual_pw) < 8:
                         st.error("Пароль не коротший за 8 символів")
@@ -253,18 +256,19 @@ else:
                         st.session_state[f"shown_pw_{u['username']}"] = manual_pw
                         st.session_state.pop(f"setpw_{u['username']}", None)
                         st.rerun()
-                if st.button("Скасувати", key=f"cancel_pw_{u['username']}"):
+                if cancel_pw:
                     st.session_state.pop(f"setpw_{u['username']}", None)
                     st.rerun()
 
             shown = st.session_state.get(f"shown_pw_{u['username']}")
             if shown:
-                st.info(f"Пароль для **{u['username']}**: **{shown}**")
-                if st.button("Приховати", key=f"hide_{u['username']}"):
+                st.success(f"Пароль для **{u['username']}**: **{shown}**")
+                st.caption("Передай особисто. Після закриття цього "
+                           "повідомлення пароль більше не показати — "
+                           "у базі зберігається лише хеш.")
+                if st.button("Зрозуміло", key=f"hide_{u['username']}"):
                     st.session_state.pop(f"shown_pw_{u['username']}", None)
                     st.rerun()
-
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
 # ------------------------------------------------------------ журнал ----
 st.markdown("")
