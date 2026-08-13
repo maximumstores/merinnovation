@@ -180,10 +180,13 @@ if not ai_ok.empty and int(ai_ok["n"].iloc[0]) > 0:
             try:
                 q.clear()
                 with get_conn().cursor() as cur:
+                    # тільки рекламний агент: повний прогін — це шість
+                    # агентів на всіх мовах, тут це зайве
                     cur.execute("""
-                        INSERT INTO merinnovation.job_queue (script, requested_by)
-                        VALUES ('10_ai_analyst.py', 'dashboard_ads')
-                    """)
+                        INSERT INTO merinnovation.job_queue
+                            (script, args, requested_by)
+                        VALUES ('10_ai_analyst.py', %s, 'dashboard_ads')
+                    """, (f"--agent ads --lang {ui_lang}",))
                 queued_msg = t("ai_refresh_queued")
             except Exception as e:
                 queued_err = str(e)
