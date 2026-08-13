@@ -11,13 +11,18 @@ import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import auth
+
 from db import (ACCENT, ACCENT2, cur_theme, download_csv_button, get_conn,
                 inject_css, lang_selector, metric_card, plotly_layout, q,
                 render_html_table, sort_controls, t, themed_axis)
 
 st.set_page_config(layout="wide", page_title="Merinnovation · Ads", page_icon="🐑")
+
+auth.require_auth("8_Ads")
 lang_selector()
 inject_css()
+auth.sidebar_user_block()
 
 th = cur_theme()
 RED = "#ef4444"
