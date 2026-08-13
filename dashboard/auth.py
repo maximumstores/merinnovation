@@ -104,12 +104,46 @@ def init_auth(conn=None):
             CREATE INDEX IF NOT EXISTS idx_login_log_at
             ON merinnovation.login_log (at DESC);
         """)
+        # Журнал дій: видно, хто які сторінки відкривав і що змінював.
+        # Це не стеження, а відповідь на питання "хто це зробив" —
+        # коли працює кілька людей, без журналу з'ясувати неможливо.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS merinnovation.activity_log (
+                id BIGSERIAL PRIMARY KEY,
+                username TEXT,
+                action TEXT,
+                target TEXT,
+                at TIMESTAMPTZ DEFAULT now()
+            );
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_activity_at
+            ON merinnovation.activity_log (at DESC);
+        """)
 
         # Першого адміна створює create_admin.py — разовий скрипт,
         # який пише напряму в базу. Тут нічого не бутстрапимо: тримати
         # робочий пароль у конфігу застосунку означає мати другий
         # екземпляр ключа, який ніхто не ротує.
     conn.commit()
+
+
+def log_action(action: str, target: str = None):
+    """Записує дію поточного користувача. Викликається там, де щось
+    змінюється або відкривається важлива сторінка."""
+    username = st.session_state.get("auth_user")
+    if not username:
+        return
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO merinnovation.activity_log (username, action, target)
+                VALUES (%s, %s, %s)
+            """, (username, action, target))
+        conn.commit()
+    except Exception:
+        pass
 
 
 def get_user(username: str):
@@ -180,15 +214,20 @@ def list_users() -> pd.DataFrame:
     """, conn)
 
 
-def create_user(username, password, full_name, role, created_by):
+def create_user(username, password, full_name, role, created_by,
+                must_change: bool = True):
+    """must_change=False — людина працює із заданим паролем, і адмін його
+    знає. must_change=True — задасть свій при першому вході, і тоді пароль
+    відомий тільки їй (відновити з бази неможливо, там лише хеш)."""
     conn = _conn()
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO merinnovation.users
-                (username, password_hash, full_name, role, created_by)
-            VALUES (%s, %s, %s, %s, %s)
+                (username, password_hash, full_name, role, created_by,
+                 must_change_password)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """, (username.strip().lower(), hash_password(password),
-              full_name, role, created_by))
+              full_name, role, created_by, must_change))
     conn.commit()
 
 
@@ -201,6 +240,20 @@ def set_password(username: str, password: str, force_change: bool = True):
             WHERE username = %s
         """, (hash_password(password), force_change, username.strip().lower()))
     conn.commit()
+
+
+def change_own_password(username: str, old: str, new: str) -> tuple:
+    """Зміна власного пароля — ЗІ СТАРИМ. Без цієї перевірки будь-хто,
+    хто отримав доступ до відкритої сесії, міняє пароль і забирає акаунт."""
+    user = get_user(username)
+    if not user:
+        return False, "user_missing"
+    if not verify_password(old, user["password_hash"]):
+        return False, "old_wrong"
+    if len(new) < 8:
+        return False, "too_short"
+    set_password(username, new, force_change=False)
+    return True, "ok"
 
 
 def set_active(username: str, active: bool):
@@ -482,6 +535,14 @@ def require_auth(page: str = None):
     if page and page in ADMIN_ONLY_PAGES and role != "admin":
         st.error(t("admin_only"))
         st.stop()
+
+    # фіксуємо відкриття сторінки — але не частіше разу на сесію,
+    # інакше кожен rerun Streamlit писав би новий рядок
+    if page:
+        seen = st.session_state.setdefault("_pages_seen", set())
+        if page not in seen:
+            seen.add(page)
+            log_action("page_open", page)
 
     return {
         "username": st.session_state["auth_user"],
