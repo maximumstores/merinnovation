@@ -144,7 +144,7 @@ else:
                     unsafe_allow_html=True)
 
             with uc2:
-                bc1, bc2, bc3 = st.columns(3)
+                bc1, bc2, bc3, bc4 = st.columns(4)
                 with bc1:
                     if is_self:
                         # свій пароль міняємо усвідомлено — зі старим,
@@ -198,6 +198,27 @@ else:
                                      use_container_width=True):
                             st.session_state[f"confirm_del_{u['username']}"] = True
                             st.rerun()
+                with bc4:
+                    if is_self:
+                        # себе роллю не понижуємо: інакше можна лишити
+                        # систему взагалі без адміністратора
+                        st.button("—", key=f"nr_{u['username']}",
+                                  disabled=True, use_container_width=True,
+                                  help="Свою роль змінити не можна")
+                    elif u["role"] == "admin":
+                        if st.button("→ Користувач", key=f"rl_{u['username']}",
+                                     use_container_width=True,
+                                     help="Забрати права адміністратора"):
+                            auth.set_role(u["username"], "user")
+                            auth.log_action("role_change", f"{u['username']}→user")
+                            st.rerun()
+                    else:
+                        if st.button("→ Адмін", key=f"rl_{u['username']}",
+                                     use_container_width=True,
+                                     help="Дати повний доступ, разом з Алертами"):
+                            auth.set_role(u["username"], "admin")
+                            auth.log_action("role_change", f"{u['username']}→admin")
+                            st.rerun()
 
             shown = st.session_state.get(f"shown_pw_{u['username']}")
             if shown:
@@ -220,6 +241,7 @@ ACTION_LABELS = {
     "user_enable": "увімкнув",
     "password_reset": "скинув пароль",
     "password_change_own": "змінив свій пароль",
+    "role_change": "змінив роль",
 }
 PAGE_LABELS = {
     "app": "Огляд", "1_Stock": "Залишки", "2_Traffic": "Трафік",
@@ -229,11 +251,23 @@ PAGE_LABELS = {
 }
 
 with st.expander("Хто що робив"):
-    acts = q("""
-        SELECT username, action, target, at
-        FROM merinnovation.activity_log
-        ORDER BY at DESC LIMIT 80
+    # Таблиця створюється в init_auth(). Якщо база вже існувала до появи
+    # журналу, її може ще не бути — перевіряємо, а не падаємо трейсбеком.
+    has_log = q("""
+        SELECT COUNT(*) AS n FROM information_schema.tables
+        WHERE table_schema='merinnovation' AND table_name='activity_log'
     """)
+    if has_log.empty or int(has_log["n"].iloc[0]) == 0:
+        acts = pd.DataFrame()
+        st.caption("Журнал ще порожній — записи з'являться після дій "
+                   "користувачів")
+    else:
+        acts = q("""
+            SELECT username, action, target, at
+            FROM merinnovation.activity_log
+            ORDER BY at DESC LIMIT 80
+        """)
+
     if acts.empty:
         st.caption("Записів ще немає")
     else:
