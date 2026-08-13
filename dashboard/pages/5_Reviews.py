@@ -12,6 +12,8 @@ import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import auth
+
 from db import (ACCENT, ACCENT2, AMAZON_DOMAINS, cell_link, cell_photo,
                 cur_theme, download_csv_button, inject_css, lang_selector,
                 metric_card, mp_label, plotly_layout, q, render_html_table,
@@ -19,8 +21,11 @@ from db import (ACCENT, ACCENT2, AMAZON_DOMAINS, cell_link, cell_photo,
 
 st.set_page_config(layout="wide", page_title="Merinnovation · Reviews",
                    page_icon="🐑")
+
+auth.require_auth("5_Reviews")
 lang_selector()
 inject_css()
+auth.sidebar_user_block()
 
 # Вікно відправки: лоадер бере замовлення 8-33 днів від дати замовлення
 AGE_MIN, AGE_MAX = 8, 33
@@ -371,6 +376,46 @@ if not cov.empty:
         lk["height"] = 300
         figh.update_layout(**lk)
         st.plotly_chart(figh, use_container_width=True)
+
+
+# ------------------------------------------ ефективність за віком ----
+age_stats = q("""
+    SELECT order_age_days,
+           COUNT(*) FILTER (WHERE status='sent') AS sent,
+           COUNT(*) FILTER (WHERE status='already') AS already,
+           COUNT(*) FILTER (WHERE status='outside') AS outside,
+           COUNT(*) AS total
+    FROM merinnovation.review_requests
+    WHERE order_age_days IS NOT NULL
+      AND order_age_days BETWEEN 0 AND 60
+    GROUP BY 1 ORDER BY 1
+""")
+
+if not age_stats.empty and int(age_stats["total"].sum()) >= 20:
+    st.markdown("")
+    st.markdown(f"**{t('age_title')}**")
+    st.caption(t("age_note"))
+
+    age_stats["accepted_pct"] = (age_stats["sent"] / age_stats["total"]
+                                 * 100).round(1)
+
+    figa = go.Figure()
+    figa.add_bar(x=age_stats["order_age_days"], y=age_stats["sent"],
+                 name=t("st_sent"), marker_color=ACCENT)
+    figa.add_bar(x=age_stats["order_age_days"], y=age_stats["outside"],
+                 name=t("st_outside"), marker_color="#f59e0b")
+    figa.add_bar(x=age_stats["order_age_days"], y=age_stats["already"],
+                 name=t("st_already"), marker_color=ACCENT2)
+    lk = plotly_layout(title=t("age_chart_title"))
+    lk["barmode"] = "stack"
+    lk["height"] = 300
+    lk["xaxis"] = themed_axis(title=t("age_axis"), showgrid=False)
+    figa.update_layout(**lk)
+    st.plotly_chart(figa, use_container_width=True)
+
+    total_pts = int(age_stats["total"].sum())
+    if total_pts < 200:
+        st.caption(t("age_low_sample").format(n=total_pts))
 
 # ---------------------------------------------------------- по ASIN ----
 st.markdown("")
