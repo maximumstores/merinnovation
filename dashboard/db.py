@@ -945,6 +945,30 @@ button[kind="secondary"], button[kind="secondary"] * {{
 }}
 button[kind="secondary"]:hover {{ border-color: {ACCENT} !important; }}
 
+/* Розкривні блоки: без цього на світлій темі заголовок лишається
+   темним із темним текстом і не читається */
+[data-testid="stExpander"] details {{
+    background-color: {th["card"]} !important;
+    border: 1px solid {th["border"]} !important;
+    border-radius: 10px !important;
+}}
+[data-testid="stExpander"] summary {{
+    background-color: {th["card"]} !important;
+    color: {th["text"]} !important;
+}}
+[data-testid="stExpander"] summary * {{ color: {th["text"]} !important; }}
+[data-testid="stExpander"] summary:hover * {{ color: {ACCENT} !important; }}
+[data-testid="stExpander"] svg {{ fill: {th["text"]} !important; }}
+
+/* Кнопка показу пароля в полях вводу */
+[data-testid="stTextInput"] button,
+[data-testid="stTextInput"] button * {{
+    background-color: {th["card"]} !important;
+    color: {th["muted"]} !important;
+    border-color: {th["border"]} !important;
+}}
+[data-testid="stTextInput"] svg {{ fill: {th["muted"]} !important; }}
+
 [data-testid="stPageLink"] * {{ color: {th["text"]} !important; }}
 
 .mp-card {{
