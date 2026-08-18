@@ -120,6 +120,21 @@ def init_auth(conn=None):
             CREATE INDEX IF NOT EXISTS idx_activity_at
             ON merinnovation.activity_log (at DESC);
         """)
+        # Блокнот адміна: паролі, які ЗАДАВ адмін, щоб не тримати їх
+        # у голові й не скидати заново після кожного закритого вікна.
+        #
+        # ВАЖЛИВО: це не відновлення хешів — так не буває. Сюди пише лише
+        # той пароль, який адмін щойно призначив. Щойно людина змінить його
+        # сама, запис стає нечинним, і це видно в картці.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS merinnovation.password_notes (
+                username TEXT PRIMARY KEY,
+                password TEXT,
+                set_by TEXT,
+                set_at TIMESTAMPTZ DEFAULT now(),
+                changed_by_user BOOLEAN DEFAULT FALSE
+            );
+        """)
 
         # Першого адміна створює create_admin.py — разовий скрипт,
         # який пише напряму в базу. Тут нічого не бутстрапимо: тримати
@@ -189,16 +204,27 @@ def mark_login(username: str):
 
 
 def too_many_attempts(username: str) -> bool:
-    """Захист від перебору: 5 невдалих спроб за 15 хвилин."""
+    """Захист від перебору: 10 невдалих спроб за 15 хвилин.
+
+    Адміністраторів не блокуємо: власник не має замикати себе зовні
+    через кілька помилок у паролі. Для звичайних акаунтів захист
+    лишається — саме їх перебирають."""
     try:
         conn = _conn()
         with conn.cursor() as cur:
+            cur.execute("""
+                SELECT role FROM merinnovation.users WHERE username = %s
+            """, (username,))
+            row = cur.fetchone()
+            if row and row[0] == "admin":
+                return False
+
             cur.execute("""
                 SELECT COUNT(*) FROM merinnovation.login_log
                 WHERE username = %s AND success = FALSE
                   AND at > now() - INTERVAL '15 minutes'
             """, (username,))
-            return cur.fetchone()[0] >= 5
+            return cur.fetchone()[0] >= 10
     except Exception:
         return False
 
@@ -214,16 +240,71 @@ def list_users() -> pd.DataFrame:
     """, conn)
 
 
-def create_user(username, password, full_name, role, created_by):
+def create_user(username, password, full_name, role, created_by,
+                must_change: bool = True):
+    """must_change=False — людина працює із заданим паролем, і адмін його
+    знає. must_change=True — задасть свій при першому вході, і тоді пароль
+    відомий тільки їй (відновити з бази неможливо, там лише хеш)."""
     conn = _conn()
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO merinnovation.users
-                (username, password_hash, full_name, role, created_by)
-            VALUES (%s, %s, %s, %s, %s)
+                (username, password_hash, full_name, role, created_by,
+                 must_change_password)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """, (username.strip().lower(), hash_password(password),
-              full_name, role, created_by))
+              full_name, role, created_by, must_change))
     conn.commit()
+
+
+def remember_password(username: str, password: str, set_by: str):
+    """Зберігає пароль, який задав адмін."""
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO merinnovation.password_notes
+                    (username, password, set_by, changed_by_user)
+                VALUES (%s, %s, %s, FALSE)
+                ON CONFLICT (username) DO UPDATE SET
+                    password = EXCLUDED.password,
+                    set_by = EXCLUDED.set_by,
+                    set_at = now(),
+                    changed_by_user = FALSE
+            """, (username.strip().lower(), password, set_by))
+        conn.commit()
+    except Exception:
+        pass
+
+
+def mark_password_changed(username: str):
+    """Людина змінила пароль сама — запис у блокноті більше не чинний."""
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE merinnovation.password_notes
+                SET changed_by_user = TRUE
+                WHERE username = %s
+            """, (username.strip().lower(),))
+        conn.commit()
+    except Exception:
+        pass
+
+
+def get_password_note(username: str):
+    """Повертає (пароль, дата, чи змінив користувач сам) або None."""
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT password, set_at, changed_by_user
+                FROM merinnovation.password_notes WHERE username = %s
+            """, (username.strip().lower(),))
+            row = cur.fetchone()
+        return row if row else None
+    except Exception:
+        return None
 
 
 def set_password(username: str, password: str, force_change: bool = True):
@@ -331,6 +412,26 @@ button[kind="secondary"], button[kind="secondary"] * {{
     border-color: {th["border"]} !important;
 }}
 button[kind="secondary"]:hover {{ border-color: {ACCENT} !important; }}
+
+button[kind="secondaryFormSubmit"],
+button[kind="secondaryFormSubmit"] * {{
+    background-color: {th["card"]} !important;
+    color: {th["text"]} !important;
+    border-color: {th["border"]} !important;
+}}
+
+/* Випадні списки: виділений пункт має бути читабельним */
+li[role="option"] {{
+    background-color: {th["card"]} !important;
+    color: {th["text"]} !important;
+}}
+li[role="option"] * {{ background-color: transparent !important; }}
+li[role="option"]:hover,
+li[role="option"][aria-selected="true"],
+li[role="option"][aria-selected="true"] > * {{
+    background-color: {ACCENT} !important;
+    color: #ffffff !important;
+}}
 
 /* Кнопка "показати пароль" — той самий фон, що й поле */
 [data-testid="stTextInput"] button,
@@ -497,6 +598,7 @@ def _change_password_form():
             else:
                 set_password(st.session_state["auth_user"], p1,
                              force_change=False)
+                mark_password_changed(st.session_state["auth_user"])
                 st.session_state["auth_must_change"] = False
                 st.success(t("pw_changed"))
                 st.rerun()
