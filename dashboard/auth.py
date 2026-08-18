@@ -409,6 +409,19 @@ button[kind="secondaryFormSubmit"] * {{
     border-color: {th["border"]} !important;
 }}
 
+/* Випадні списки: виділений пункт має бути читабельним */
+li[role="option"] {{
+    background-color: {th["card"]} !important;
+    color: {th["text"]} !important;
+}}
+li[role="option"] * {{ background-color: transparent !important; }}
+li[role="option"]:hover,
+li[role="option"][aria-selected="true"],
+li[role="option"][aria-selected="true"] > * {{
+    background-color: {ACCENT} !important;
+    color: #ffffff !important;
+}}
+
 /* Кнопка "показати пароль" — той самий фон, що й поле */
 [data-testid="stTextInput"] button,
 [data-testid="stTextInput"] button * {{
