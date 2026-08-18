@@ -471,8 +471,39 @@ with tab3:
             pick = st.selectbox(
                 "Підставити дані з бази", ["— ввести вручну —"]
                 + med_list["seller_sku"].tolist(), key="calc_sku")
+
+            # Streamlit ігнорує value=, якщо у віджета є key і в state
+            # вже щось лежить. Тому при зміні SKU пишемо ЗРАЗУ в state
+            # і перезапускаємо — інакше поля лишаються з дефолтами.
             if pick != "— ввести вручну —":
                 med_row = med_list[med_list["seller_sku"] == pick].iloc[0]
+                if st.session_state.get("_calc_loaded") != pick:
+                    st.session_state["_calc_loaded"] = pick
+                    st.session_state["calc_cur"] = float(
+                        med_row["current_price"])
+                    # цільова медіана: якщо база просіла — піднімаємо
+                    # до поточної ціни, інакше пропонуємо +10%
+                    med_val = float(med_row["median_price"])
+                    cur_val = float(med_row["current_price"])
+                    st.session_state["calc_target"] = (
+                        cur_val if med_val < cur_val * 0.98
+                        else round(cur_val * 1.1, 2))
+                    v = float(med_row["velocity_per_day"])
+                    st.session_state["calc_vnow"] = round(v, 2)
+                    # очікувана швидкість при вищій ціні — стартова
+                    # оцінка -40%, користувач має підставити свій факт
+                    st.session_state["calc_vnew"] = round(v * 0.6, 2)
+                    st.rerun()
+            elif st.session_state.get("_calc_loaded"):
+                st.session_state.pop("_calc_loaded", None)
+
+    if med_row is not None:
+        st.caption(
+            f"З бази: медіана ${float(med_row['median_price']):,.2f} · "
+            f"поточна ${float(med_row['current_price']):,.2f} · "
+            f"{int(med_row['units_total'])} од. за 90 днів"
+            + ("  ⚠️ мало продажів, медіана нестабільна"
+               if int(med_row["units_total"]) < 30 else ""))
 
     st.markdown("")
     st.markdown("**Вводні**")
@@ -481,26 +512,25 @@ with tab3:
 
     i1, i2, i3, i4 = st.columns(4)
     with i1:
+        st.session_state.setdefault("calc_cur", 24.99)
         cur_price = st.number_input(
             "Поточна ціна, $", min_value=0.01, step=0.01, format="%.2f",
-            value=float(med_row["current_price"]) if med_row is not None
-            else 24.99, key="calc_cur")
+            key="calc_cur")
     with i2:
+        st.session_state.setdefault("calc_target", 29.99)
         target_price = st.number_input(
             "Цільова медіана, $", min_value=0.01, step=0.01, format="%.2f",
-            value=float(med_row["current_price"]) if med_row is not None
-            else 29.99, key="calc_target",
-            help="Ціна, до якої хочемо підняти базу")
+            key="calc_target", help="Ціна, до якої хочемо підняти базу")
     with i3:
+        st.session_state.setdefault("calc_vnow", 20.0)
         v_now = st.number_input(
             "Швидкість зараз, од/день", min_value=0.0, step=0.1,
-            value=float(med_row["velocity_per_day"]) if med_row is not None
-            else 20.0, key="calc_vnow")
+            key="calc_vnow")
     with i4:
+        st.session_state.setdefault("calc_vnew", 12.0)
         v_new = st.number_input(
             "Швидкість при новій ціні", min_value=0.0, step=0.1,
-            value=(round(float(med_row["velocity_per_day"]) * 0.6, 2)
-                   if med_row is not None else 12.0), key="calc_vnew",
+            key="calc_vnew",
             help="Скільки реально продаватимете за новою ціною. "
                  "Це головне число — від нього залежить усе.")
 
