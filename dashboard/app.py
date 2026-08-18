@@ -608,11 +608,13 @@ def require_auth(page: str = None):
     """Ставиться на початку КОЖНОЇ сторінки, одразу після set_page_config.
 
     Повертає dict користувача або зупиняє рендер сторінки."""
+    # Ініціалізація не має мовчки валити сторінку: якщо таблиця вже є,
+    # а якийсь ALTER не пройшов, користувач має побачити причину,
+    # а не порожній екран.
     try:
         init_auth()
     except Exception as e:
-        st.error(f"Не вдалось ініціалізувати авторизацію: {e}")
-        st.stop()
+        st.warning(f"Ініціалізація авторизації з помилкою: {e}")
 
     if not _session_valid():
         if not _has_any_user():
@@ -639,7 +641,10 @@ def require_auth(page: str = None):
         seen = st.session_state.setdefault("_pages_seen", set())
         if page not in seen:
             seen.add(page)
-            log_action("page_open", page)
+            try:
+                log_action("page_open", page)
+            except Exception:
+                pass
 
     return {
         "username": st.session_state["auth_user"],
