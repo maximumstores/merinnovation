@@ -200,6 +200,7 @@ TRANSLATIONS = {
         "ads_ai_working": "Аналізую рекламу — за мить оновлю сторінку",
         "ads_ai_refresh": "Аналіз",
         "ads_ai_none": "Висновків ще немає — натисни «Аналіз», раннер підготує їх за пару хвилин",
+        "nav_settings": "Налаштування",
         "nav_pricing": "Ціни та акції",
         "nav_ads": "Реклама", "ads_title": "Реклама",
         "no_ads_data": "Немає таблиць — запусти 05_ads_loader.py",
@@ -413,6 +414,7 @@ TRANSLATIONS = {
         "leak_refunds": "Возвраты",
         "leak_fees": "Сборы Amazon",
         "leak_dead_stock": "Замороженный запас",
+        "nav_settings": "Настройки",
         "nav_pricing": "Цены и акции",
         "nav_ads": "Реклама", "ads_title": "Реклама",
         "ads_ai_title": "Что говорит аналитик",
@@ -630,6 +632,7 @@ The total counts **matured dates only** — otherwise zeros from recent days wou
         "leak_refunds": "Refunds",
         "leak_fees": "Amazon fees",
         "leak_dead_stock": "Dead stock",
+        "nav_settings": "Settings",
         "nav_pricing": "Pricing",
         "nav_ads": "Ads", "ads_title": "Advertising",
         "ads_ai_title": "What the analyst says",
@@ -810,6 +813,7 @@ def lang_selector() -> str:
         st.page_link("pages/6_AI.py", label=t("nav_ai"), icon=":material/auto_awesome:")
         st.page_link("pages/8_Ads.py", label=t("nav_ads"), icon=":material/campaign:")
         st.page_link("pages/10_Pricing.py", label=t("nav_pricing"), icon=":material/sell:")
+        st.page_link("pages/11_Settings.py", label=t("nav_settings"), icon=":material/tune:")
         # Алерти й Користувачі — лише для адміна: технічні алерти
         # звичайному користувачу нічого не дають, лише відволікають.
         #
