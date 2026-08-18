@@ -921,16 +921,25 @@ div[data-baseweb="select"] div,
 ul[role="listbox"], div[data-baseweb="popover"], div[data-baseweb="menu"] {{
     background-color: {th["card"]} !important;
 }}
-li[role="option"], li[role="option"] * {{
+li[role="option"] {{
     background-color: {th["card"]} !important;
     color: {th["text"]} !important;
 }}
-li[role="option"]:hover,
-li[role="option"][aria-selected="true"] {{
-    background-color: {ACCENT} !important;
-    color: #ffffff !important;
+/* Вкладені елементи НЕ задають власний фон — інакше вони перекривають
+   підсвітку і виділений пункт стає зеленим на зеленому: текст зникає */
+li[role="option"] * {{
+    background-color: transparent !important;
+    color: {th["text"]} !important;
 }}
+li[role="option"]:hover,
+li[role="option"][aria-selected="true"],
+li[role="option"][aria-selected="true"] > *,
+li[role="option"]:hover > * {{
+    background-color: {ACCENT} !important;
+}}
+li[role="option"]:hover,
 li[role="option"]:hover *,
+li[role="option"][aria-selected="true"],
 li[role="option"][aria-selected="true"] * {{
     color: #ffffff !important;
 }}
