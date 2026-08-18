@@ -626,10 +626,16 @@ with tab3:
             xs.append(d)
             share.append(units_new / tot * 100 if tot > 0 else 0)
 
+        # ACCENT у форматі #rrggbb; додавання альфи рядком дає 8-значний
+        # hex, який plotly не приймає — переводимо в rgba
+        _h = ACCENT.lstrip("#")
+        _r, _g, _b = (int(_h[i:i + 2], 16) for i in (0, 2, 4))
+        fill_rgba = f"rgba({_r},{_g},{_b},0.15)"
+
         figc = go.Figure()
         figc.add_scatter(x=xs, y=share, mode="lines", name="Частка нової ціни",
                          line=dict(color=ACCENT, width=3),
-                         fill="tozeroy", fillcolor=f"{ACCENT}22")
+                         fill="tozeroy", fillcolor=fill_rgba)
         figc.add_hline(y=50, line_dash="dash", line_color=AMBER,
                        annotation_text="поріг 50%")
         if days_median != float("inf"):
