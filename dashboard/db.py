@@ -804,13 +804,7 @@ def lang_selector() -> str:
                 f'style="max-width: 175px; width: 100%;" /></div>',
                 unsafe_allow_html=True,
             )
-        # st.page_link("app.py") веде на КОРІНЬ застосунку і перезавантажує
-        # його повністю — сесія губиться, екран порожній. st.switch_page
-        # переходить усередині застосунку, як і на решту сторінок.
-        if st.button(t("nav_overview"), key="nav_home",
-                     icon=":material/bar_chart:", use_container_width=True,
-                     type="tertiary"):
-            st.switch_page("app.py")
+        st.page_link("pages/0_Overview.py", label=t("nav_overview"), icon=":material/bar_chart:")
         st.page_link("pages/1_Stock.py", label=t("nav_stock"), icon=":material/inventory_2:")
         st.page_link("pages/2_Traffic.py", label=t("nav_traffic"), icon=":material/trending_up:")
         st.page_link("pages/3_Finance.py", label=t("nav_finance"), icon=":material/payments:")
