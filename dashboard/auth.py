@@ -92,6 +92,21 @@ def init_auth(conn=None):
                 login_count INT DEFAULT 0
             );
         """)
+        # Сесії в базі: st.session_state гине при перезавантаженні
+        # застосунку (а перехід на корінь саме це й робить). Токен у
+        # URL + запис у базі дозволяють сесії пережити перезапуск.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS merinnovation.sessions (
+                token TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                expires_at TIMESTAMPTZ NOT NULL
+            );
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sessions_exp
+            ON merinnovation.sessions (expires_at);
+        """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS merinnovation.login_log (
                 id BIGSERIAL PRIMARY KEY,
@@ -360,6 +375,88 @@ def delete_user(username: str):
 
 # --------------------------------------------------------------- UI ----
 
+def create_session(username: str) -> str:
+    """Створює токен сесії. Повертає його для збереження в URL."""
+    token = secrets.token_urlsafe(32)
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            # INTERVAL '%s hours' не працює: psycopg2 підставить значення
+            # в лапках і вийде INTERVAL ''12' hours'. Склеюємо рядок і
+            # приводимо до типу вже в SQL.
+            cur.execute("""
+                INSERT INTO merinnovation.sessions
+                    (token, username, expires_at)
+                VALUES (%s, %s, now() + (%s || ' hours')::interval)
+            """, (token, username, str(SESSION_HOURS)))
+            # прибираємо протухлі, щоб таблиця не росла нескінченно
+            cur.execute("""
+                DELETE FROM merinnovation.sessions WHERE expires_at < now()
+            """)
+        conn.commit()
+    except Exception:
+        return ""
+    return token
+
+
+def session_user(token: str):
+    """Хто стоїть за токеном, якщо він ще дійсний."""
+    if not token:
+        return None
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT u.username, u.full_name, u.role, u.is_active,
+                       u.must_change_password
+                FROM merinnovation.sessions s
+                JOIN merinnovation.users u ON u.username = s.username
+                WHERE s.token = %s AND s.expires_at > now()
+            """, (token,))
+            row = cur.fetchone()
+        if not row or not row[3]:
+            return None
+        return {"username": row[0], "full_name": row[1], "role": row[2],
+                "must_change": row[4]}
+    except Exception:
+        return None
+
+
+def drop_session(token: str):
+    if not token:
+        return
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM merinnovation.sessions WHERE token = %s",
+                        (token,))
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _restore_from_url() -> bool:
+    """Піднімає сесію з токена в URL після перезавантаження застосунку."""
+    try:
+        token = st.query_params.get("s")
+    except Exception:
+        return False
+    if not token:
+        return False
+
+    user = session_user(token)
+    if not user:
+        return False
+
+    st.session_state["auth_user"] = user["username"]
+    st.session_state["auth_role"] = user["role"]
+    st.session_state["auth_name"] = user["full_name"] or user["username"]
+    st.session_state["auth_at"] = datetime.now(timezone.utc)
+    st.session_state["auth_must_change"] = user["must_change"]
+    st.session_state["auth_token"] = token
+    return True
+
+
 def _session_valid() -> bool:
     if not st.session_state.get("auth_user"):
         return False
@@ -538,11 +635,18 @@ def _minimal_login():
                 and user["is_active"]:
             log_attempt(user["username"], True)
             mark_login(user["username"])
+            token = create_session(user["username"])
             st.session_state["auth_user"] = user["username"]
             st.session_state["auth_role"] = user["role"]
             st.session_state["auth_name"] = user["full_name"] or user["username"]
             st.session_state["auth_at"] = datetime.now(timezone.utc)
             st.session_state["auth_must_change"] = user["must_change"]
+            st.session_state["auth_token"] = token
+            if token:
+                try:
+                    st.query_params["s"] = token
+                except Exception:
+                    pass
             st.rerun()
         else:
             log_attempt((u or "").strip().lower(), False)
@@ -605,11 +709,18 @@ def _login_form():
 
             log_attempt(u, True)
             mark_login(u)
+            token = create_session(user["username"])
             st.session_state["auth_user"] = user["username"]
             st.session_state["auth_role"] = user["role"]
             st.session_state["auth_name"] = user["full_name"] or user["username"]
             st.session_state["auth_at"] = datetime.now(timezone.utc)
             st.session_state["auth_must_change"] = user["must_change"]
+            st.session_state["auth_token"] = token
+            if token:
+                try:
+                    st.query_params["s"] = token
+                except Exception:
+                    pass
             st.rerun()
 
 
@@ -655,6 +766,11 @@ def require_auth(page: str = None):
         init_auth()
     except Exception as e:
         st.warning(f"Ініціалізація авторизації з помилкою: {e}")
+
+    # Перехід на корінь застосунку перезавантажує його і гасить
+    # session_state. Токен в URL дозволяє відновити сесію.
+    if not _session_valid():
+        _restore_from_url()
 
     if not _session_valid():
         try:
@@ -722,11 +838,16 @@ def sidebar_user_block():
             unsafe_allow_html=True)
         if st.button(t("logout"), key="logout_btn", use_container_width=True,
                      icon=":material/logout:"):
+            drop_session(st.session_state.get("auth_token", ""))
             for k in ("auth_user", "auth_role", "auth_name", "auth_at",
-                      "auth_must_change"):
+                      "auth_must_change", "auth_token"):
                 st.session_state.pop(k, None)
+            try:
+                st.query_params.clear()
+            except Exception:
+                pass
             st.rerun()
 
 
 def is_admin() -> bool:
-    return st.session_state.get("auth_role") == "admin" 
+    return st.session_state.get("auth_role") == "admin"
