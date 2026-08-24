@@ -1139,4 +1139,4 @@ def sort_controls(options: dict, key: str, default_index: int = 0,
                              index=0 if default_desc else 1,
                              key=f"sort_ord_{key}")
     ascending = order == t("sort_asc")
-    return options[sel], ascending
+    return options[sel], ascending 
