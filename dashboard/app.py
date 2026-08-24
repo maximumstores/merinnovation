@@ -523,8 +523,17 @@ def _no_users_hint():
 
 def _login_form():
     from db import ACCENT, cur_theme, t
-    _login_css()
-    _login_sidebar()
+    # Косметика не має ламати вхід: якщо CSS або сайдбар упадуть,
+    # форма все одно має з'явитись. Порожній екран без пояснення —
+    # найгірше, що може побачити користувач.
+    try:
+        _login_css()
+    except Exception:
+        pass
+    try:
+        _login_sidebar()
+    except Exception:
+        pass
     th = cur_theme()
 
     st.markdown(
@@ -578,8 +587,11 @@ def _login_form():
 
 def _change_password_form():
     from db import cur_theme, t
-    _login_css()
-    _login_sidebar()
+    try:
+        _login_css()
+        _login_sidebar()
+    except Exception:
+        pass
     th = cur_theme()
     st.warning(t("pw_required"))
 
@@ -617,10 +629,14 @@ def require_auth(page: str = None):
         st.warning(f"Ініціалізація авторизації з помилкою: {e}")
 
     if not _session_valid():
-        if not _has_any_user():
-            _no_users_hint()
-            st.stop()
-        _login_form()
+        try:
+            if not _has_any_user():
+                _no_users_hint()
+                st.stop()
+            _login_form()
+        except Exception as e:
+            st.error("Не вдалось показати форму входу")
+            st.exception(e)
         st.stop()
 
     if st.session_state.get("auth_must_change"):
