@@ -204,16 +204,27 @@ def mark_login(username: str):
 
 
 def too_many_attempts(username: str) -> bool:
-    """Захист від перебору: 5 невдалих спроб за 15 хвилин."""
+    """Захист від перебору: 10 невдалих спроб за 15 хвилин.
+
+    Адміністраторів не блокуємо: власник не має замикати себе зовні
+    через кілька помилок у паролі. Для звичайних акаунтів захист
+    лишається — саме їх перебирають."""
     try:
         conn = _conn()
         with conn.cursor() as cur:
+            cur.execute("""
+                SELECT role FROM merinnovation.users WHERE username = %s
+            """, (username,))
+            row = cur.fetchone()
+            if row and row[0] == "admin":
+                return False
+
             cur.execute("""
                 SELECT COUNT(*) FROM merinnovation.login_log
                 WHERE username = %s AND success = FALSE
                   AND at > now() - INTERVAL '15 minutes'
             """, (username,))
-            return cur.fetchone()[0] >= 5
+            return cur.fetchone()[0] >= 10
     except Exception:
         return False
 
@@ -510,10 +521,47 @@ def _no_users_hint():
     )
 
 
+def _minimal_login():
+    """Аварійна форма без теми і перекладів.
+
+    Якщо впаде щось у db (тема, логотип, i18n), користувач має
+    залишитись здатним увійти. Порожній екран не залишає варіантів."""
+    st.title("Merinnovation")
+    st.caption("Аналітичний кабінет")
+    with st.form("login_minimal"):
+        u = st.text_input("Логін")
+        p = st.text_input("Пароль", type="password")
+        ok = st.form_submit_button("Увійти", type="primary")
+    if ok:
+        user = get_user((u or "").strip().lower())
+        if user and verify_password(p, user["password_hash"]) \
+                and user["is_active"]:
+            log_attempt(user["username"], True)
+            mark_login(user["username"])
+            st.session_state["auth_user"] = user["username"]
+            st.session_state["auth_role"] = user["role"]
+            st.session_state["auth_name"] = user["full_name"] or user["username"]
+            st.session_state["auth_at"] = datetime.now(timezone.utc)
+            st.session_state["auth_must_change"] = user["must_change"]
+            st.rerun()
+        else:
+            log_attempt((u or "").strip().lower(), False)
+            st.error("Невірний логін або пароль")
+
+
 def _login_form():
     from db import ACCENT, cur_theme, t
-    _login_css()
-    _login_sidebar()
+    # Косметика не має ламати вхід: якщо CSS або сайдбар упадуть,
+    # форма все одно має з'явитись. Порожній екран без пояснення —
+    # найгірше, що може побачити користувач.
+    try:
+        _login_css()
+    except Exception:
+        pass
+    try:
+        _login_sidebar()
+    except Exception:
+        pass
     th = cur_theme()
 
     st.markdown(
@@ -567,8 +615,11 @@ def _login_form():
 
 def _change_password_form():
     from db import cur_theme, t
-    _login_css()
-    _login_sidebar()
+    try:
+        _login_css()
+        _login_sidebar()
+    except Exception:
+        pass
     th = cur_theme()
     st.warning(t("pw_required"))
 
@@ -597,17 +648,28 @@ def require_auth(page: str = None):
     """Ставиться на початку КОЖНОЇ сторінки, одразу після set_page_config.
 
     Повертає dict користувача або зупиняє рендер сторінки."""
+    # Ініціалізація не має мовчки валити сторінку: якщо таблиця вже є,
+    # а якийсь ALTER не пройшов, користувач має побачити причину,
+    # а не порожній екран.
     try:
         init_auth()
     except Exception as e:
-        st.error(f"Не вдалось ініціалізувати авторизацію: {e}")
-        st.stop()
+        st.warning(f"Ініціалізація авторизації з помилкою: {e}")
 
     if not _session_valid():
-        if not _has_any_user():
-            _no_users_hint()
-            st.stop()
-        _login_form()
+        try:
+            if not _has_any_user():
+                _no_users_hint()
+                st.stop()
+            _login_form()
+        except Exception as e:
+            if type(e).__name__ in ("StopException", "RerunException"):
+                raise
+            # Гарна форма впала — показуємо аварійну, щоб користувач
+            # усе одно міг зайти, а не дивився в порожній екран.
+            _minimal_login()
+            with st.expander("Технічні деталі"):
+                st.exception(e)
         st.stop()
 
     if st.session_state.get("auth_must_change"):
@@ -628,7 +690,10 @@ def require_auth(page: str = None):
         seen = st.session_state.setdefault("_pages_seen", set())
         if page not in seen:
             seen.add(page)
-            log_action("page_open", page)
+            try:
+                log_action("page_open", page)
+            except Exception:
+                pass
 
     return {
         "username": st.session_state["auth_user"],
@@ -664,4 +729,4 @@ def sidebar_user_block():
 
 
 def is_admin() -> bool:
-    return st.session_state.get("auth_role") == "admin"
+    return st.session_state.get("auth_role") == "admin" 
