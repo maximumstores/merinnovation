@@ -755,17 +755,38 @@ def _change_password_form():
                 st.rerun()
 
 
+_NAV_HIDE_CSS = """
+<style>
+[data-testid="stSidebarNav"] {display: none !important;}
+[data-testid="stToolbar"] {display: none !important;}
+[data-testid="stAppDeployButton"] {display: none !important;}
+.stAppDeployButton, .stDeployButton {display: none !important;}
+[data-testid="stHeaderActionElements"] {display: none !important;}
+#MainMenu {visibility: hidden !important;}
+footer {visibility: hidden !important;}
+</style>
+"""
+
+
 def require_auth(page: str = None):
     """Ставиться на початку КОЖНОЇ сторінки, одразу після set_page_config.
 
     Повертає dict користувача або зупиняє рендер сторінки."""
+    # Ховаємо рідну навігацію Streamlit ПЕРШОЮ дією: інакше вона встигає
+    # блимнути на кожному переході, поки йде перевірка сесії й запити до бази.
+    st.markdown(_NAV_HIDE_CSS, unsafe_allow_html=True)
     # Ініціалізація не має мовчки валити сторінку: якщо таблиця вже є,
     # а якийсь ALTER не пройшов, користувач має побачити причину,
     # а не порожній екран.
-    try:
-        init_auth()
-    except Exception as e:
-        st.warning(f"Ініціалізація авторизації з помилкою: {e}")
+    # init_auth() виконує CREATE TABLE IF NOT EXISTS для п'яти таблиць.
+    # На кожному переході це зайвий похід у базу і кілька секунд затримки.
+    # Достатньо одного разу на сесію.
+    if not st.session_state.get("_auth_inited"):
+        try:
+            init_auth()
+            st.session_state["_auth_inited"] = True
+        except Exception as e:
+            st.warning(f"Ініціалізація авторизації з помилкою: {e}")
 
     # Перехід на корінь застосунку перезавантажує його і гасить
     # session_state. Токен в URL дозволяє відновити сесію.
