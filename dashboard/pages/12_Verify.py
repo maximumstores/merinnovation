@@ -65,11 +65,22 @@ def init_table():
     conn.close()
 
 
-try:
-    init_table()
-except Exception as e:
-    st.error(f"Не вдалось створити таблицю звірки: {e}")
-    st.stop()
+# Таблицю створюємо раз на сесію: на кожному переході це зайвий похід
+# у базу. Плюс з'єднання може протухнути між запитами — тоді скидаємо
+# кеш і пробуємо ще раз, а не лякаємо користувача помилкою.
+if not st.session_state.get("_verify_inited"):
+    try:
+        init_table()
+        st.session_state["_verify_inited"] = True
+    except Exception:
+        try:
+            from db import _new_conn
+            _new_conn.clear()
+            init_table()
+            st.session_state["_verify_inited"] = True
+        except Exception as e:
+            st.error(f"База недоступна: {e}")
+            st.stop()
 
 # ------------------------------------------- наші поточні значення ----
 # Кожна метрика: (ключ, підпис, де шукати в Seller Central, формат)
