@@ -200,6 +200,7 @@ TRANSLATIONS = {
         "ads_ai_working": "Аналізую рекламу — за мить оновлю сторінку",
         "ads_ai_refresh": "Аналіз",
         "ads_ai_none": "Висновків ще немає — натисни «Аналіз», раннер підготує їх за пару хвилин",
+        "nav_verify": "Звірка",
         "nav_settings": "Налаштування",
         "nav_pricing": "Ціни та акції",
         "nav_ads": "Реклама", "ads_title": "Реклама",
@@ -414,6 +415,7 @@ TRANSLATIONS = {
         "leak_refunds": "Возвраты",
         "leak_fees": "Сборы Amazon",
         "leak_dead_stock": "Замороженный запас",
+        "nav_verify": "Сверка",
         "nav_settings": "Настройки",
         "nav_pricing": "Цены и акции",
         "nav_ads": "Реклама", "ads_title": "Реклама",
@@ -632,6 +634,7 @@ The total counts **matured dates only** — otherwise zeros from recent days wou
         "leak_refunds": "Refunds",
         "leak_fees": "Amazon fees",
         "leak_dead_stock": "Dead stock",
+        "nav_verify": "Verify",
         "nav_settings": "Settings",
         "nav_pricing": "Pricing",
         "nav_ads": "Ads", "ads_title": "Advertising",
@@ -814,6 +817,7 @@ def lang_selector() -> str:
         st.page_link("pages/8_Ads.py", label=t("nav_ads"), icon=":material/campaign:")
         st.page_link("pages/10_Pricing.py", label=t("nav_pricing"), icon=":material/sell:")
         st.page_link("pages/11_Settings.py", label=t("nav_settings"), icon=":material/tune:")
+        st.page_link("pages/12_Verify.py", label=t("nav_verify"), icon=":material/fact_check:")
         # Алерти й Користувачі — лише для адміна: технічні алерти
         # звичайному користувачу нічого не дають, лише відволікають.
         #
@@ -1157,4 +1161,4 @@ def sort_controls(options: dict, key: str, default_index: int = 0,
                              index=0 if default_desc else 1,
                              key=f"sort_ord_{key}")
     ascending = order == t("sort_asc")
-    return options[sel], ascending 
+    return options[sel], ascending
